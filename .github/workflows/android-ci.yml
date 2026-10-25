@@ -32,7 +32,7 @@ jobs:
         with:
           cache-provider: basic
       - name: Build debug APK and run unit tests
-        run: ./gradlew --no-daemon clean testDebugUnitTest assembleDebug
+        run: chmod +x ./gradlew && ./gradlew --no-daemon clean testDebugUnitTest assembleDebug
       - name: Upload debug APK
         uses: actions/upload-artifact@v6
         with:
