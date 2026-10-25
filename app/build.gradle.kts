@@ -14,7 +14,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
     }
-    buildFeatures {
+    buildTypes {\n        getByName("release") {\n            // CI signs this release variant so the APK can be installed directly.\n            signingConfig = signingConfigs.getByName("debug")\n            isMinifyEnabled = false\n        }\n    }\n    buildFeatures {
         compose = true
         buildConfig = true
     }
