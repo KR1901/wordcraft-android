@@ -47,6 +47,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,7 +57,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.wordcraft.android.ai.OnDeviceQwenWritingAssistant
 import com.wordcraft.android.ai.WritingAction
+import kotlinx.coroutines.launch
 
 @Composable
 fun WordCraftApp() {
@@ -65,7 +68,12 @@ fun WordCraftApp() {
     var draft by remember { mutableStateOf("Your words, only clearer.") }
     var chosenAction by remember { mutableStateOf(WritingAction.FIX_GRAMMAR) }
     var showSetup by remember { mutableStateOf(false) }
-    var notice by remember { mutableStateOf("Ready when you are.") }\n    val scope = rememberCoroutineScope()\n    var modelReady by remember { mutableStateOf(OnDeviceQwenWritingAssistant.isModelDownloaded(context)) }\n    var isDownloading by remember { mutableStateOf(false) }\n    var isWorking by remember { mutableStateOf(false) }\n    var modelProgress by remember { mutableStateOf("Not downloaded") }
+    var notice by remember { mutableStateOf("Ready when you are.") }
+    val scope = rememberCoroutineScope()
+    var modelReady by remember { mutableStateOf(OnDeviceQwenWritingAssistant.isModelDownloaded(context)) }
+    var isDownloading by remember { mutableStateOf(false) }
+    var isWorking by remember { mutableStateOf(false) }
+    var modelProgress by remember { mutableStateOf("Not downloaded") }
 
     Scaffold(
         contentWindowInsets = WindowInsets.navigationBars,
