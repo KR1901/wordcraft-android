@@ -65,7 +65,7 @@ fun WordCraftApp() {
     var draft by remember { mutableStateOf("Your words, only clearer.") }
     var chosenAction by remember { mutableStateOf(WritingAction.FIX_GRAMMAR) }
     var showSetup by remember { mutableStateOf(false) }
-    var notice by remember { mutableStateOf("Ready when you are.") }
+    var notice by remember { mutableStateOf("Ready when you are.") }\n    val scope = rememberCoroutineScope()\n    var modelReady by remember { mutableStateOf(OnDeviceQwenWritingAssistant.isModelDownloaded(context)) }\n    var isDownloading by remember { mutableStateOf(false) }\n    var isWorking by remember { mutableStateOf(false) }\n    var modelProgress by remember { mutableStateOf("Not downloaded") }
 
     Scaffold(
         contentWindowInsets = WindowInsets.navigationBars,
@@ -136,15 +136,33 @@ fun WordCraftApp() {
                         }
                     }
                     Button(
+                        enabled = !isWorking && !isDownloading,
                         onClick = {
-                            notice = if (draft.isBlank()) "Add some text first." else
-                                "${chosenAction.label} selected. Connect an AI provider in Settings to run it."
-                            showSetup = true
+                            when {
+                                draft.isBlank() -> notice = "Add some text first."
+                                !modelReady -> {
+                                    notice = "Download the on-device model in AI settings first."
+                                    showSetup = true
+                                }
+                                else -> scope.launch {
+                                    isWorking = true
+                                    notice = "Running Qwen locally on this device…"
+                                    try {
+                                        val result = OnDeviceQwenWritingAssistant(context).rewrite(draft, chosenAction)
+                                        draft = result.text
+                                        notice = "Done — processed on your device."
+                                    } catch (error: Throwable) {
+                                        notice = error.message ?: "Local AI failed. Try again."
+                                    } finally {
+                                        isWorking = false
+                                    }
+                                }
+                            }
                         },
                         modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)
                     ) {
                         Icon(Icons.Rounded.AutoAwesome, contentDescription = null)
-                        Spacer(Modifier.width(8.dp)); Text("Improve writing"); Spacer(Modifier.weight(1f))
+                        Spacer(Modifier.width(8.dp)); Text(if (isWorking) "Improving…" else "Improve writing"); Spacer(Modifier.weight(1f))
                         Icon(Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = null)
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -170,8 +188,43 @@ fun WordCraftApp() {
                             Icon(Icons.Rounded.Psychology, contentDescription = null); Spacer(Modifier.width(8.dp))
                             Text("Make AI yours", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         }
-                        Text("AI is not configured yet. For production, connect a secure HTTPS backend that stores provider credentials server-side; never bundle a private API key in the APK.",
-                            style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "Run writing improvements privately on this phone with Qwen3 0.6B (Apache-2.0). No API key or cloud account is needed. The model is downloaded separately (${OnDeviceQwenWritingAssistant.MODEL_SIZE_LABEL}) and then works offline.",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            if (isDownloading) "Downloading model… $modelProgress"
+                            else if (modelReady) "Qwen3 is ready on this device."
+                            else "Model status: $modelProgress",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Button(
+                            enabled = !isDownloading && !isWorking && !modelReady,
+                            onClick = {
+                                scope.launch {
+                                    isDownloading = true
+                                    modelProgress = "Starting download"
+                                    try {
+                                        OnDeviceQwenWritingAssistant.downloadModel(context) { downloaded, total ->
+                                            modelProgress = if (total > 0L) {
+                                                "${downloaded / 1_000_000} / ${total / 1_000_000} MB"
+                                            } else "${downloaded / 1_000_000} MB downloaded"
+                                        }
+                                        modelReady = true
+                                        modelProgress = "Downloaded"
+                                        notice = "Qwen3 is ready. Writing improvements now run offline."
+                                    } catch (error: Throwable) {
+                                        modelProgress = error.message ?: "Download failed"
+                                    } finally {
+                                        isDownloading = false
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(if (isDownloading) "Downloading…" else if (modelReady) "Model downloaded" else "Download Qwen3 model")
+                        }
                         OutlinedButton(onClick = { context.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) }, modifier = Modifier.fillMaxWidth()) {
                             Text("Open keyboard settings")
                         }
