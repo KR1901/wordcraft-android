@@ -20,7 +20,8 @@ android {
             signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = false
         }
-    }\n    buildFeatures {
+    }
+    buildFeatures {
         compose = true
         buildConfig = true
     }
