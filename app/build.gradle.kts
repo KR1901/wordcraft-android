@@ -7,6 +7,9 @@ android {
     compileSdk = 37
     defaultConfig {
         applicationId = "com.wordcraft.android"
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
         minSdk = 26
         targetSdk = 36
         versionCode = 3
