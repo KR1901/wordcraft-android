@@ -65,7 +65,8 @@ import kotlinx.coroutines.launch
 fun WordCraftApp() {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
-    var draft by remember { mutableStateOf("Your words, only clearer.") }
+    val draftStore = remember(context) { context.getSharedPreferences("wordcraft_documents", 0) }
+    var draft by remember { mutableStateOf(draftStore.getString("draft_default", "Your words, only clearer.") ?: "") }
     var chosenAction by remember { mutableStateOf(WritingAction.FIX_GRAMMAR) }
     var showSetup by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf("Ready when you are.") }
@@ -121,7 +122,7 @@ fun WordCraftApp() {
                         Text("${draft.length} chars", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     OutlinedTextField(
-                        value = draft, onValueChange = { draft = it },
+                        value = draft, onValueChange = { draft = it; draftStore.edit().putString("draft_default", it).apply() },
                         modifier = Modifier.fillMaxWidth().height(190.dp), shape = RoundedCornerShape(20.dp),
                         placeholder = { Text("Paste or write something…") },
                         supportingText = { Text("Your draft stays on this device until you choose an AI provider.") }
