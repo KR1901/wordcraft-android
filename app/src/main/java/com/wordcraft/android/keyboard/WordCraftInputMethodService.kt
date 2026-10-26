@@ -78,7 +78,7 @@ class WordCraftInputMethodService : InputMethodService() {
                         3 -> {
                             darkTheme = !darkTheme
                             getSharedPreferences("keyboard_preferences", MODE_PRIVATE).edit().putBoolean("dark_theme", darkTheme).apply()
-                            inputView = buildKeyboard()
+                            setInputView(buildKeyboard())
                         }
                         4 -> startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                         1 -> runKeyboardAction("Fix grammar")
@@ -138,15 +138,15 @@ class WordCraftInputMethodService : InputMethodService() {
                 else connection.deleteSurroundingText(1, 0)
             }
             "↵" -> connection.commitText("\n", 1)
-            "⇧" -> { shifted = !shifted; inputView = buildKeyboard() }
-            "?123" -> { symbols = true; shifted = false; inputView = buildKeyboard() }
-            "ABC" -> { symbols = false; shifted = false; inputView = buildKeyboard() }
+            "⇧" -> { shifted = !shifted; setInputView(buildKeyboard()) }
+            "?123" -> { symbols = true; shifted = false; setInputView(buildKeyboard()) }
+            "ABC" -> { symbols = false; shifted = false; setInputView(buildKeyboard()) }
             "English" -> switchToNextInputMethod(false)
             "☻" -> connection.commitText("😊", 1)
             else -> {
                 val output = if (shifted && !symbols) key.uppercase(Locale.ROOT) else key
                 connection.commitText(output, 1)
-                if (shifted && !symbols) { shifted = false; inputView = buildKeyboard() }
+                if (shifted && !symbols) { shifted = false; setInputView(buildKeyboard()) }
                 refreshSuggestions()
             }
         }
