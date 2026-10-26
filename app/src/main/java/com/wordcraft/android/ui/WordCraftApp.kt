@@ -130,7 +130,8 @@ fun WordCraftApp() {
                     val rows = listOf(
                         listOf(WritingAction.FIX_GRAMMAR, WritingAction.PARAPHRASE),
                         listOf(WritingAction.PROFESSIONAL, WritingAction.FRIENDLY),
-                        listOf(WritingAction.CONCISE, WritingAction.SIMPLIFY)
+                        listOf(WritingAction.CONCISE, WritingAction.SIMPLIFY),
+                        listOf(WritingAction.EXPAND)
                     )
                     rows.forEach { row ->
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
