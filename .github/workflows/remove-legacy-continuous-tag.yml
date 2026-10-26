@@ -1,0 +1,28 @@
+name: Remove legacy continuous tag
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  remove-legacy-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete legacy release and tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPO="${GITHUB_REPOSITORY}"
+          TAG="continuous"
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release delete "$TAG" --repo "$REPO" --yes
+          fi
+          gh api --method DELETE "repos/$REPO/git/refs/tags/$TAG" || {
+            echo "Tag may already be absent; checking the result."
+          }
+          if gh api "repos/$REPO/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag still exists; deletion did not complete."
+            exit 1
+          fi
+          echo "Legacy continuous release/tag removed, if present."
