@@ -2,6 +2,8 @@ package com.wordcraft.android.ui
 
 import android.content.Intent
 import android.provider.Settings
+import android.content.Context
+import android.view.inputmethod.InputMethodManager
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -69,6 +71,12 @@ fun WordCraftApp() {
     var draft by remember { mutableStateOf(draftStore.getString("draft_default", "Your words, only clearer.") ?: "") }
     var chosenAction by remember { mutableStateOf(WritingAction.FIX_GRAMMAR) }
     var showSetup by remember { mutableStateOf(false) }
+    val inputMethodManager = remember(context) { context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager }
+    var keyboardEnabled by remember { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        val enabled = Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_INPUT_METHODS).orEmpty()
+        keyboardEnabled = enabled.split(':').any { it.contains(context.packageName) && it.contains("WordCraftInputMethodService") }
+    }
     var notice by remember { mutableStateOf("Ready when you are.") }
     val scope = rememberCoroutineScope()
     var modelReady by remember { mutableStateOf(OnDeviceQwenWritingAssistant.isModelDownloaded(context)) }
@@ -80,9 +88,12 @@ fun WordCraftApp() {
         contentWindowInsets = WindowInsets.navigationBars,
         floatingActionButton = {
             ExtendedFloatingActionButton(
-                onClick = { context.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) },
+                onClick = {
+                    if (keyboardEnabled) inputMethodManager.showInputMethodPicker()
+                    else context.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
+                },
                 icon = { Icon(Icons.Rounded.Keyboard, contentDescription = null) },
-                text = { Text("Enable keyboard") }
+                text = { Text(if (keyboardEnabled) "Switch to WordCraft" else "Enable WordCraft keyboard") }
             )
         }
     ) { insets ->
