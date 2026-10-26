@@ -40,26 +40,21 @@ jobs:
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
-      - name: Publish latest installable release APK
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Read app version
+        id: version
+        shell: bash
         run: |
-          set -euo pipefail
-          APK="app/build/outputs/apk/release/app-release.apk"
-          test -f "$APK"
-          TAG="continuous"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -f "$TAG" "$GITHUB_SHA"
-          git push origin "refs/tags/$TAG" --force
-          NOTES="Automatically updated installable APK from main commit $GITHUB_SHA. This is a release-variant APK signed with the CI debug key so it can be installed directly. CI signing keys may change between builds; uninstall an older build first if Android rejects an update."
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$APK" --clobber
-            gh release edit "$TAG" --title "WordCraft — Latest APK" --notes "$NOTES" --prerelease
-          else
-            gh release create "$TAG" "$APK" --title "WordCraft — Latest APK" --notes "$NOTES" --prerelease
-          fi
+          VERSION_NAME=$(grep -E 'versionName' app/build.gradle.kts | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
+          test -n "$VERSION_NAME"
+          echo "name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+      - name: Upload versioned release APK artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v6
+        with:
+          name: WordCraft-${{ steps.version.outputs.name }}-release
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 90
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v6
