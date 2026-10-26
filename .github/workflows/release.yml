@@ -1,29 +1,24 @@
-name: Release APK
+name: Versioned Android Release
 
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
-    inputs:
-      tag_name:
-        description: 'Release tag (for example v0.1.0)'
-        required: true
-        type: string
 
 permissions:
   contents: write
 
 jobs:
   release:
-    name: Build and publish APK
+    name: Build and publish versioned APK
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - name: Checkout
+      - name: Checkout source
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.inputs.tag_name || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.ref || github.ref }}
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
@@ -33,15 +28,33 @@ jobs:
         uses: gradle/actions/setup-gradle@v6
         with:
           cache-provider: basic
-      - name: Build release APK
+      - name: Read app version
+        id: version
+        shell: bash
+        run: |
+          VERSION_NAME="$(sed -n 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n 1)"
+          VERSION_CODE="$(sed -n 's/^[[:space:]]*versionCode[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' app/build.gradle.kts | head -n 1)"
+          test -n "$VERSION_NAME"
+          test -n "$VERSION_CODE"
+          echo "name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "Building WordCraft version $VERSION_NAME (versionCode $VERSION_CODE)"
+      - name: Build and test release APK
         run: chmod +x ./gradlew && ./gradlew --no-daemon clean testDebugUnitTest assembleRelease
-      - name: Rename APK
-        run: cp app/build/outputs/apk/release/app-release-unsigned.apk WordCraft-${GITHUB_REF_NAME}.apk
-      - name: Publish GitHub Release
+      - name: Name versioned APK
+        run: cp app/build/outputs/apk/release/app-release.apk "WordCraft-${{ steps.version.outputs.name }}.apk"
+      - name: Publish versioned GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          TAG="${{ github.event.inputs.tag_name || github.ref_name }}"
-          gh release create "$TAG" WordCraft-${GITHUB_REF_NAME}.apk \
-            --title "WordCraft $TAG" \
-            --notes "WordCraft Android APK build. This APK is unsigned and intended for testing. Configure signing secrets for signed distribution."
+          VERSION="${{ steps.version.outputs.name }}"
+          TAG="v$VERSION"
+          APK="WordCraft-$VERSION.apk"
+          NOTES="WordCraft Android release $VERSION (versionCode ${{ steps.version.outputs.code }}). Built from commit $GITHUB_SHA. Update app/build.gradle.kts versionName and increment versionCode for the next release. This APK is signed with the CI debug key for direct testing; production distribution should use a protected signing key."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" --clobber
+            gh release edit "$TAG" --title "WordCraft $VERSION" --notes "$NOTES"
+          else
+            gh release create "$TAG" "$APK" --title "WordCraft $VERSION" --notes "$NOTES"
+          fi
