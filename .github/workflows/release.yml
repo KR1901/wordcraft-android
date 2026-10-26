@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/release.yml'
+      - 'app/build.gradle.kts'
 
 permissions:
   contents: write
@@ -54,6 +55,17 @@ jobs:
           git push origin HEAD:main
       - name: Build and test release APK
         run: chmod +x ./gradlew && ./gradlew --no-daemon clean testDebugUnitTest assembleRelease
+      - name: Verify ARM64 APK compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="app/build/outputs/apk/release/app-release.apk"
+          test -s "$APK"
+          if ! unzip -l "$APK" | grep -q 'lib/arm64-v8a/'; then
+            echo "Release APK does not contain arm64-v8a native libraries."
+            exit 1
+          fi
+          echo "Verified ARM64 native libraries are packaged."
       - name: Name APK
         run: cp app/build/outputs/apk/release/app-release.apk "WordCraft-${{ steps.version.outputs.name }}.apk"
       - name: Publish release with APK prominently listed
