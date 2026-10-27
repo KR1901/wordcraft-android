@@ -18,7 +18,7 @@ jobs:
   emulator-smoke:
     name: Launch app on Android emulator
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 35
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -32,21 +32,33 @@ jobs:
         with:
           cache-provider: basic
       - name: Run Android instrumentation smoke test
-        id: smoke
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
-          target: google_apis
+          api-level: 30
+          target: default
           arch: x86_64
-          profile: pixel_6
-          emulator-options: -no-window -no-audio -no-boot-anim
+          profile: pixel_2
+          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot
+          emulator-boot-timeout: 900
           disable-animations: true
           script: |
+            set -Eeuo pipefail
+            capture_logs() {
+              status=$?
+              if [ "$status" -ne 0 ]; then
+                echo "::group::Android emulator and app logs"
+                adb devices -l || true
+                adb logcat -d -v time -t 8000 | grep -E -C 6 'FATAL EXCEPTION|AndroidRuntime|com\\.wordcraft\\.android|Process: |Fatal signal|UnsatisfiedLinkError|NoClassDefFoundError' || true
+                echo "::endgroup::"
+              fi
+              exit "$status"
+            }
+            trap capture_logs EXIT
             chmod +x ./gradlew
-            ./gradlew --no-daemon connectedDebugAndroidTest
-      - name: Capture emulator logs on failure
+            ./gradlew --no-daemon --stacktrace connectedDebugAndroidTest
+      - name: Capture host-visible emulator logs on failure
         if: failure()
         shell: bash
         run: |
-          adb devices
-          adb logcat -d -v time -t 5000 | grep -E -C 5 'FATAL EXCEPTION|AndroidRuntime|com\.wordcraft\.android|Process: ' || true
+          adb devices -l || true
+          adb logcat -d -v time -t 8000 | grep -E -C 6 'FATAL EXCEPTION|AndroidRuntime|com\\.wordcraft\\.android|Process: |Fatal signal|UnsatisfiedLinkError|NoClassDefFoundError' || true
