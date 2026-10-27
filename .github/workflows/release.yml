@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/release.yml'
       - 'app/build.gradle.kts'
+      - 'app/src/main/AndroidManifest.xml'
 
 permissions:
   contents: write
@@ -55,17 +56,17 @@ jobs:
           git push origin HEAD:main
       - name: Build and test release APK
         run: chmod +x ./gradlew && ./gradlew --no-daemon clean testDebugUnitTest assembleRelease
-      - name: Verify ARM64 APK compatibility
+      - name: Verify APK artifact
         shell: bash
         run: |
           set -euo pipefail
           APK="app/build/outputs/apk/release/app-release.apk"
           test -s "$APK"
-          if ! unzip -l "$APK" | grep -q 'lib/arm64-v8a/'; then
-            echo "Release APK does not contain arm64-v8a native libraries."
-            exit 1
+          if unzip -l "$APK" | grep -q 'lib/arm64-v8a/'; then
+            echo "APK includes arm64-v8a native libraries."
+          else
+            echo "APK has no native libraries (expected while LiteRT is disabled)."
           fi
-          echo "Verified ARM64 native libraries are packaged."
       - name: Name APK
         run: cp app/build/outputs/apk/release/app-release.apk "WordCraft-${{ steps.version.outputs.name }}.apk"
       - name: Publish release with APK prominently listed
@@ -78,4 +79,4 @@ jobs:
           TAG="v$VERSION"
           git tag "$TAG" HEAD
           git push origin "refs/tags/$TAG"
-          gh release create "$TAG" "WordCraft-$VERSION.apk" --repo "$GITHUB_REPOSITORY" --title "WordCraft v$VERSION — Install APK" --notes "Install WordCraft v$VERSION on Android. Download WordCraft-$VERSION.apk below. Version code: ${{ steps.version.outputs.code }}. This release APK is debug-signed for direct testing; CI debug signing keys may change between builds, so uninstall an older build first if Android rejects an update." --latest
+          gh release create "$TAG" "WordCraft-$VERSION.apk" --repo "$GITHUB_REPOSITORY" --title "WordCraft v$VERSION — Install APK" --notes "Install WordCraft v$VERSION on Android. Download WordCraft-$VERSION.apk below. Version code: ${{ steps.version.outputs.code }}. This release APK is debug-signed for direct testing; CI debug signing keys may change between builds, so uninstall an older build first if Android rejects an update. On-device Qwen inference is temporarily disabled for Android 16 stability." --latest
