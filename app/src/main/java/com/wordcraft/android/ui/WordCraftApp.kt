@@ -60,6 +60,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.wordcraft.android.ai.OnDeviceQwenWritingAssistant
+import com.wordcraft.android.ai.QwenModelStore
 import com.wordcraft.android.ai.WritingAction
 import kotlinx.coroutines.launch
 
@@ -79,7 +80,8 @@ fun WordCraftApp() {
     }
     var notice by remember { mutableStateOf("Ready when you are.") }
     val scope = rememberCoroutineScope()
-    var modelReady by remember { mutableStateOf(OnDeviceQwenWritingAssistant.isModelDownloaded(context)) }
+    // Status checks use QwenModelStore only — never loads LiteRT native code at startup.
+    var modelReady by remember { mutableStateOf(QwenModelStore.isModelDownloaded(context)) }
     var isDownloading by remember { mutableStateOf(false) }
     var isWorking by remember { mutableStateOf(false) }
     var modelProgress by remember { mutableStateOf("Not downloaded") }
@@ -210,7 +212,7 @@ fun WordCraftApp() {
                             Text("Make AI yours", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         }
                         Text(
-                            "Run writing improvements privately on this phone with Qwen3 0.6B (Apache-2.0). No API key or cloud account is needed. The model is downloaded separately (${OnDeviceQwenWritingAssistant.MODEL_SIZE_LABEL}) and then works offline.",
+                            "Run writing improvements privately on this phone with Qwen3 0.6B (Apache-2.0). No API key or cloud account is needed. The model is downloaded separately (${QwenModelStore.MODEL_SIZE_LABEL}) and then works offline.",
                             style = MaterialTheme.typography.bodyMedium
                         )
                         Text(
@@ -227,7 +229,7 @@ fun WordCraftApp() {
                                     isDownloading = true
                                     modelProgress = "Starting download"
                                     try {
-                                        OnDeviceQwenWritingAssistant.downloadModel(context) { downloaded, total ->
+                                        QwenModelStore.downloadModel(context) { downloaded, total ->
                                             modelProgress = if (total > 0L) {
                                                 "${downloaded / 1_000_000} / ${total / 1_000_000} MB"
                                             } else "${downloaded / 1_000_000} MB downloaded"

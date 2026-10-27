@@ -1,47 +1,68 @@
 package com.wordcraft.android.ai
 
 import android.content.Context
-import com.google.ai.edge.litertlm.Backend
-import com.google.ai.edge.litertlm.Contents
-import com.google.ai.edge.litertlm.ConversationConfig
-import com.google.ai.edge.litertlm.Engine
-import com.google.ai.edge.litertlm.EngineConfig
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.withContext
-import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
 
 /**
  * Fully on-device writing assistant backed by the Apache-2.0 Qwen3 0.6B INT4
  * LiteRT-LM artifact. The model is downloaded separately so it does not inflate
  * the APK by hundreds of megabytes.
+ *
+ * LiteRT classes are only referenced inside [rewrite] so opening the app never
+ * loads native libraries until the user actually runs a writing action.
  */
 class OnDeviceQwenWritingAssistant(private val context: Context) : WritingAssistant {
     override suspend fun rewrite(input: String, action: WritingAction): WritingResult =
         withContext(Dispatchers.IO) {
-            val model = modelFile(context)
-            check(model.isFile && model.length() > MIN_MODEL_BYTES) {
+            val model = QwenModelStore.modelFile(context)
+            check(model.isFile && QwenModelStore.isModelDownloaded(context)) {
                 "Download the Qwen model in AI settings before using writing actions."
             }
 
-            val config = EngineConfig(
-                modelPath = model.absolutePath,
-                backend = Backend.CPU(),
-                cacheDir = context.cacheDir.absolutePath
-            )
-            Engine(config).use { engine ->
-                engine.initialize()
-                engine.createConversation(
-                    ConversationConfig(
-                        systemInstruction = Contents.of(
-                            "You are WordCraft, a concise writing assistant. Follow the requested " +
-                                "writing task. Return only the improved text, without explanations, " +
-                                "quotes, or a preamble. Preserve the author's meaning and language."
-                        )
-                    )
-                ).use { conversation ->
+            // Load LiteRT only when inference is requested (avoids startup UnsatisfiedLinkError).
+            val backendClass = Class.forName("com.google.ai.edge.litertlm.Backend")
+            val engineConfigClass = Class.forName("com.google.ai.edge.litertlm.EngineConfig")
+            val engineClass = Class.forName("com.google.ai.edge.litertlm.Engine")
+            val conversationConfigClass = Class.forName("com.google.ai.edge.litertlm.ConversationConfig")
+            val contentsClass = Class.forName("com.google.ai.edge.litertlm.Contents")
+
+            val cpuBackend = backendClass.getMethod("CPU").invoke(null)
+            val engineConfigCtor = engineConfigClass.constructors.first {
+                it.parameterTypes.size >= 2
+            }
+            // EngineConfig(modelPath, backend, cacheDir) — match published API via best-effort ctor.
+            val engineConfig = try {
+                engineConfigClass.getConstructor(
+                    String::class.java,
+                    backendClass,
+                    String::class.java
+                ).newInstance(model.absolutePath, cpuBackend, context.cacheDir.absolutePath)
+            } catch (_: NoSuchMethodException) {
+                // Fallback if signature differs slightly across litertlm versions.
+                engineConfigCtor.newInstance(model.absolutePath, cpuBackend, context.cacheDir.absolutePath)
+            }
+
+            val engine = engineClass.getConstructor(engineConfigClass).newInstance(engineConfig)
+            try {
+                engineClass.getMethod("initialize").invoke(engine)
+                val systemText =
+                    "You are WordCraft, a concise writing assistant. Follow the requested " +
+                        "writing task. Return only the improved text, without explanations, " +
+                        "quotes, or a preamble. Preserve the author's meaning and language."
+                val contents = contentsClass.getMethod("of", String::class.java).invoke(null, systemText)
+                val conversationConfig = conversationConfigClass.constructors.first().let { ctor ->
+                    when (ctor.parameterCount) {
+                        1 -> ctor.newInstance(contents)
+                        else -> ctor.newInstance(*Array(ctor.parameterCount) { i ->
+                            if (i == 0) contents else null
+                        })
+                    }
+                }
+                val conversation = engineClass
+                    .getMethod("createConversation", conversationConfigClass)
+                    .invoke(engine, conversationConfig)
+                try {
                     val prompt = """
                         Task: ${action.instruction}
 
@@ -50,74 +71,53 @@ class OnDeviceQwenWritingAssistant(private val context: Context) : WritingAssist
 
                         Return only the revised text.
                     """.trimIndent()
-                    val response = conversation.sendMessageAsync(prompt).toList()
-                        .joinToString(separator = "") { it.toString() }
-                        .trim()
+                    @Suppress("UNCHECKED_CAST")
+                    val flow = conversation.javaClass
+                        .methods.first { it.name == "sendMessageAsync" && it.parameterCount == 1 }
+                        .invoke(conversation, prompt)
+                    val chunks = mutableListOf<Any?>()
+                    // Collect Flow via blocking coroutine API when available; else toString path.
+                    val toList = try {
+                        Class.forName("kotlinx.coroutines.flow.FlowKt")
+                            .methods.firstOrNull { it.name == "toList" && it.parameterCount >= 1 }
+                    } catch (_: Throwable) {
+                        null
+                    }
+                    val response = if (flow is kotlinx.coroutines.flow.Flow<*>) {
+                        flow.toList().joinToString(separator = "") { it.toString() }.trim()
+                    } else {
+                        flow?.toString()?.trim().orEmpty()
+                    }
                     check(response.isNotBlank()) { "The local model returned an empty response." }
                     WritingResult(response)
+                } finally {
+                    (conversation as? AutoCloseable)?.close()
+                        ?: try {
+                            conversation.javaClass.getMethod("close").invoke(conversation)
+                        } catch (_: Throwable) {
+                        }
                 }
+            } finally {
+                (engine as? AutoCloseable)?.close()
+                    ?: try {
+                        engineClass.getMethod("close").invoke(engine)
+                    } catch (_: Throwable) {
+                    }
             }
         }
 
     companion object {
-        const val MODEL_NAME = "qwen3_0.6b_nothink_q4_block32_ekv1280.litertlm"
-        const val MODEL_SIZE_LABEL = "about 347 MB"
-        const val MODEL_URL =
-            "https://huggingface.co/litert-community/Qwen3-0.6B-int4/resolve/main/$MODEL_NAME"
-        private const val MIN_MODEL_BYTES = 100_000_000L
+        const val MODEL_NAME = QwenModelStore.MODEL_NAME
+        const val MODEL_SIZE_LABEL = QwenModelStore.MODEL_SIZE_LABEL
+        const val MODEL_URL = QwenModelStore.MODEL_URL
 
-        fun modelFile(context: Context): File = File(context.filesDir, MODEL_NAME)
+        fun modelFile(context: Context) = QwenModelStore.modelFile(context)
 
-        fun isModelDownloaded(context: Context): Boolean {
-            val file = modelFile(context)
-            return file.isFile && file.length() > MIN_MODEL_BYTES
-        }
+        fun isModelDownloaded(context: Context) = QwenModelStore.isModelDownloaded(context)
 
         suspend fun downloadModel(
             context: Context,
             onProgress: (downloadedBytes: Long, totalBytes: Long) -> Unit = { _, _ -> }
-        ): File = withContext(Dispatchers.IO) {
-            val destination = modelFile(context)
-            if (isModelDownloaded(context)) return@withContext destination
-
-            val partial = File(context.filesDir, "$MODEL_NAME.part")
-            val connection = (URL(MODEL_URL).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 20_000
-                readTimeout = 60_000
-                instanceFollowRedirects = true
-                setRequestProperty("User-Agent", "WordCraft-Android")
-            }
-            try {
-                connection.connect()
-                check(connection.responseCode in 200..299) {
-                    "Model download failed (HTTP ${connection.responseCode}). Check your connection and try again."
-                }
-                val total = connection.contentLengthLong
-                connection.inputStream.use { input ->
-                    partial.outputStream().buffered().use { output ->
-                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE * 8)
-                        var downloaded = 0L
-                        while (true) {
-                            val count = input.read(buffer)
-                            if (count < 0) break
-                            output.write(buffer, 0, count)
-                            downloaded += count
-                            onProgress(downloaded, total)
-                        }
-                    }
-                }
-                check(partial.length() > MIN_MODEL_BYTES) {
-                    "The downloaded model file is incomplete. Please try again."
-                }
-                if (destination.exists()) destination.delete()
-                check(partial.renameTo(destination)) { "Could not save the model to app storage." }
-                destination
-            } catch (error: Throwable) {
-                partial.delete()
-                throw error
-            } finally {
-                connection.disconnect()
-            }
-        }
+        ) = QwenModelStore.downloadModel(context, onProgress)
     }
 }
