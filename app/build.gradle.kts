@@ -7,13 +7,14 @@ android {
     compileSdk = 37
     defaultConfig {
         applicationId = "com.wordcraft.android"
+        // No third-party JNI packages currently; keep filters ready for optional AI later.
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
         }
         minSdk = 26
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.1.7"
+        versionCode = 9
+        versionName = "0.1.8"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
     }
@@ -30,10 +31,6 @@ android {
     }
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
-        jniLibs {
-            // Extract .so files so devices with strict page-size / loader rules can open the APK.
-            useLegacyPackaging = true
-        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -60,7 +57,8 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.datastore:datastore-preferences:1.2.0")
-    implementation("com.google.ai.edge.litertlm:litertlm-android:latest.release")
+    // LiteRT-LM intentionally omitted from the APK: its native .so files were crashing
+    // process start on Android 15/16 release installs. Re-add behind a dynamic feature later.
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

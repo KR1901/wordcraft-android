@@ -1,62 +1,25 @@
 package com.wordcraft.android.ai
 
 import android.content.Context
-import com.google.ai.edge.litertlm.Backend
-import com.google.ai.edge.litertlm.Contents
-import com.google.ai.edge.litertlm.ConversationConfig
-import com.google.ai.edge.litertlm.Engine
-import com.google.ai.edge.litertlm.EngineConfig
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.withContext
 
 /**
- * Fully on-device writing assistant backed by the Apache-2.0 Qwen3 0.6B INT4
- * LiteRT-LM artifact. The model is downloaded separately so it does not inflate
- * the APK by hundreds of megabytes.
- *
- * Do not call this class from UI composition startup paths. Use [QwenModelStore]
- * for download/status checks so opening the app does not load native libraries.
+ * Placeholder writing assistant while LiteRT-LM is kept out of the APK.
+ * Native LiteRT packages were causing immediate process death on some Android 15/16 devices.
+ * Download/status still work via [QwenModelStore]; inference will return a clear error until
+ * a safer optional integration ships.
  */
 class OnDeviceQwenWritingAssistant(private val context: Context) : WritingAssistant {
     override suspend fun rewrite(input: String, action: WritingAction): WritingResult =
         withContext(Dispatchers.IO) {
-            val model = QwenModelStore.modelFile(context)
             check(QwenModelStore.isModelDownloaded(context)) {
-                "Download the Qwen model in AI settings before using writing actions."
+                "Download the Qwen model in AI settings first. On-device inference is temporarily unavailable in this build while we fix Android 16 compatibility."
             }
-
-            val config = EngineConfig(
-                modelPath = model.absolutePath,
-                backend = Backend.CPU(),
-                cacheDir = context.cacheDir.absolutePath
+            throw IllegalStateException(
+                "On-device Qwen inference is temporarily disabled in this build (Android 16 stability). " +
+                    "The writing studio, keyboard, and model download still work. Update when LiteRT is re-enabled."
             )
-            Engine(config).use { engine ->
-                engine.initialize()
-                engine.createConversation(
-                    ConversationConfig(
-                        systemInstruction = Contents.of(
-                            "You are WordCraft, a concise writing assistant. Follow the requested " +
-                                "writing task. Return only the improved text, without explanations, " +
-                                "quotes, or a preamble. Preserve the author's meaning and language."
-                        )
-                    )
-                ).use { conversation ->
-                    val prompt = """
-                        Task: ${action.instruction}
-
-                        Text to edit:
-                        $input
-
-                        Return only the revised text.
-                    """.trimIndent()
-                    val response = conversation.sendMessageAsync(prompt).toList()
-                        .joinToString(separator = "") { it.toString() }
-                        .trim()
-                    check(response.isNotBlank()) { "The local model returned an empty response." }
-                    WritingResult(response)
-                }
-            }
         }
 
     companion object {

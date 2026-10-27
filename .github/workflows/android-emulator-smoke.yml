@@ -40,7 +40,9 @@ jobs:
           profile: pixel_6
           emulator-options: -no-window -no-audio -no-boot-anim
           disable-animations: true
+          # Use bash: /bin/sh (dash) rejects `set -o pipefail`.
           script: |
-            set -o pipefail
-            chmod +x ./gradlew
-            ./gradlew --no-daemon connectedDebugAndroidTest
+            bash -euo pipefail -c '
+              chmod +x ./gradlew
+              ./gradlew --no-daemon connectedDebugAndroidTest
+            '
