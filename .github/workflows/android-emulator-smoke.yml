@@ -32,6 +32,7 @@ jobs:
         with:
           cache-provider: basic
       - name: Run Android instrumentation smoke test
+        id: smoke
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -40,9 +41,12 @@ jobs:
           profile: pixel_6
           emulator-options: -no-window -no-audio -no-boot-anim
           disable-animations: true
-          # Use bash: /bin/sh (dash) rejects `set -o pipefail`.
           script: |
-            bash -euo pipefail -c '
-              chmod +x ./gradlew
-              ./gradlew --no-daemon connectedDebugAndroidTest
-            '
+            chmod +x ./gradlew
+            ./gradlew --no-daemon connectedDebugAndroidTest
+      - name: Capture emulator logs on failure
+        if: failure()
+        shell: bash
+        run: |
+          adb devices
+          adb logcat -d -v time -t 5000 | grep -E -C 5 'FATAL EXCEPTION|AndroidRuntime|com\.wordcraft\.android|Process: ' || true
