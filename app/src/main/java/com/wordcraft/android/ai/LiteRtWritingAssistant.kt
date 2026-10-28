@@ -58,7 +58,7 @@ internal class LiteRtWritingAssistant(private val context: Context) {
             WritingResult(output)
         }
 
-    private fun generate(engine: Engine, input: String, action: WritingAction, insist: Boolean): String {
+    private suspend fun generate(engine: Engine, input: String, action: WritingAction, insist: Boolean): String {
         val config = ConversationConfig(
             systemInstruction = Contents.of(systemInstruction()),
             samplerConfig = SamplerConfig(topK = 40, topP = 0.95, temperature = if (insist) 1.0 else 0.7, seed = 0)
