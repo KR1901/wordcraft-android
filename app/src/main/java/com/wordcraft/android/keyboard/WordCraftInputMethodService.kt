@@ -73,7 +73,7 @@ class WordCraftInputMethodService : InputMethodService() {
         super.onStartInputView(info, restarting)
         lifecycleOwner.resume()
         // The decor view can be recreated while the IME lives, so re-publish on every show.
-        currentInputView?.let { publishOwner(it) }
+        runCatching { window?.window?.decorView }.getOrNull()?.let { lifecycleOwner.attachTo(it) }
         controller.prefs.reload()
         controller.onStartInput()
     }
