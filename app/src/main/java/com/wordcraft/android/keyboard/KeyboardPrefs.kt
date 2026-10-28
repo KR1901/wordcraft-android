@@ -42,7 +42,7 @@ class KeyboardPrefs(context: Context) {
         keyHeight = prefs.getInt(KEY_HEIGHT, 1)
     }
 
-    fun setKeyHeight(value: Int) {
+    fun chooseKeyHeight(value: Int) {
         keyHeight = value.coerceIn(0, 2)
         prefs.edit().putInt(KEY_HEIGHT, keyHeight).apply()
     }
