@@ -29,7 +29,16 @@ The model is served from the [LiteRT Community Qwen3-0.6B-int4 repository](https
 
 ## If the app crashes on launch
 
-The app records why the previous process died and shows a **Previous session crashed** card on the next launch, with a copy button. It reads both its own uncaught-exception log and, on Android 11+, the system's process-exit history — which also covers native crashes and includes the trace. Copy that text into an issue.
+The launcher is a plain framework-widget screen (`DiagnosticsActivity`) with no Compose, no startup
+initializers and no native code. On a healthy launch it forwards straight to the writing studio and
+you never see it. If the studio is opened and never comes up, the next launch lands there instead
+and shows: the build and device details, our uncaught-exception log, the system's process-exit
+record (Android 11+, which covers native crashes and includes the tombstone trace), and a launch
+counter that still proves a failed launch when nothing else was recorded. Use **Share this report**
+to send it on.
+
+The studio also shows a **Previous session crashed** card on its next healthy start, with a copy
+button.
 
 ## Versions
 
