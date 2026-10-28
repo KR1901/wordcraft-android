@@ -35,7 +35,7 @@ class DiagnosticsActivity : Activity() {
             showFallback(error)
             return
         }
-        val healthy = CrashReport.studioAttempts(this) == 0 && CrashReport.latest(this) == null
+        val healthy = CrashReport.studioAttempts(this) == 0
         if (healthy) {
             // Healthy state: draw this screen, then get out of the way like a normal launcher.
             Handler(Looper.getMainLooper()).postDelayed({ forwardToStudio() }, 500)
@@ -104,13 +104,17 @@ class DiagnosticsActivity : Activity() {
             }
         }, LinearLayout.LayoutParams(-1, -2))
         root.addView(Button(this).apply {
-            text = "Try the Compose studio (may crash)"
+            text = "Open the compatible studio (no Compose)"
             setOnClickListener {
-                runCatching { startActivity(Intent(this@DiagnosticsActivity, MainActivity::class.java)) }
-                    .onFailure { error ->
-                        lastError = error
-                        refresh()
-                    }
+                runCatching {
+                    startActivity(
+                        Intent(this@DiagnosticsActivity, SimpleStudioActivity::class.java)
+                            .putExtras(intent)
+                    )
+                }.onFailure { error ->
+                    lastError = error
+                    refresh()
+                }
             }
         }, LinearLayout.LayoutParams(-1, -2))
         // Staged Compose bisection: tap them in order and note the first one that kills the app.
@@ -183,13 +187,9 @@ class DiagnosticsActivity : Activity() {
         }
     }
 
-    /**
-     * The framework-widget studio. Handing over here rather than to the Compose screen is what
-     * makes the app usable on a device where Compose cannot start; the Compose studio stays
-     * reachable from the button above.
-     */
+    /** The Compose studio. The framework-widget studio stays one tap away if this one fails. */
     private fun studioIntent(): Intent =
-        Intent(this, SimpleStudioActivity::class.java).also { it.putExtras(intent) }
+        Intent(this, MainActivity::class.java).also { it.putExtras(intent) }
 
     private fun share() {
         val text = body.text.toString()
