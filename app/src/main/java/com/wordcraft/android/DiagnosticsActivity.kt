@@ -31,7 +31,7 @@ class DiagnosticsActivity : Activity() {
             // Healthy state: go straight to the studio, exactly like a normal launcher.
             forwarded = true
             CrashReport.noteStudioStart(this)
-            startActivity(Intent(this, MainActivity::class.java))
+            startActivity(studioIntent())
             finish()
             return
         }
@@ -84,7 +84,7 @@ class DiagnosticsActivity : Activity() {
             text = "Open the writing studio"
             setOnClickListener {
                 CrashReport.noteStudioStart(this@DiagnosticsActivity)
-                startActivity(Intent(this@DiagnosticsActivity, MainActivity::class.java))
+                startActivity(studioIntent())
             }
         }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
         root.addView(Button(this).apply {
@@ -96,7 +96,7 @@ class DiagnosticsActivity : Activity() {
             setOnClickListener {
                 CrashReport.resetStudioAttempts(this@DiagnosticsActivity)
                 CrashReport.noteStudioStart(this@DiagnosticsActivity)
-                startActivity(Intent(this@DiagnosticsActivity, MainActivity::class.java))
+                startActivity(studioIntent())
             }
         }, LinearLayout.LayoutParams(-1, -2))
 
@@ -123,6 +123,10 @@ class DiagnosticsActivity : Activity() {
             appendLine(report?.text ?: "(no stack trace available)")
         }
     }
+
+    /** Carries the launch intent's extras (the keyboard handoff) through to the studio. */
+    private fun studioIntent(): Intent =
+        Intent(this, MainActivity::class.java).also { it.putExtras(intent) }
 
     private fun share() {
         val text = body.text.toString()
