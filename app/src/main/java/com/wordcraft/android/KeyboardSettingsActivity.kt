@@ -22,22 +22,29 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.wordcraft.android.keyboard.KeyboardPrefs
 import com.wordcraft.android.keyboard.WordCraftKeyboardTheme
+import com.wordcraft.android.keyboard.WordEngine
 
 /** Settings for the keyboard. Every switch writes straight to [KeyboardPrefs]. */
 class KeyboardSettingsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val prefs = KeyboardPrefs(this)
+        val engine = WordEngine(this)
         setContent {
             WordCraftKeyboardTheme(prefs.darkTheme) {
                 Column(
@@ -88,10 +95,50 @@ class KeyboardSettingsActivity : ComponentActivity() {
                         )
                     }
 
+                    Text("Personal dictionary", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Words you add here are always offered in the suggestion strip and are never autocorrected away.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    var draft by remember { mutableStateOf("") }
+                    var userWords by remember { mutableStateOf(engine.userWords()) }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = draft,
+                            onValueChange = { draft = it },
+                            label = { Text("Add a word") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Button(onClick = {
+                            engine.addUserWord(draft)
+                            draft = ""
+                            userWords = engine.userWords()
+                        }) { Text("Add") }
+                    }
+                    userWords.forEach { word ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(word, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                            TextButton(onClick = {
+                                engine.removeUserWord(word)
+                                userWords = engine.userWords()
+                            }) { Text("Remove") }
+                        }
+                    }
+
                     Text(
                         "Holding ⌫ deletes whole words, then clears the rest of the text quickly. " +
-                            "Double-tap ⇧ for caps lock. Drag on the space bar to move the cursor. " +
-                            "Long-press a key for accents and alternates.",
+                            "Swipe left on ⌫ to delete word by word. Long-press Paste for clipboard " +
+                            "history. Double-tap ⇧ for caps lock. Drag on the space bar to move the " +
+                            "cursor. Long-press a key for accents and alternates.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
