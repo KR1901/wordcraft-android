@@ -7,7 +7,13 @@ enum class WritingAction(val label: String, val instruction: String) {
     FRIENDLY("Friendly", "Rewrite in a warm, friendly, natural tone."),
     CONCISE("Make concise", "Make shorter without losing important information."),
     EXPAND("Expand", "Expand with useful detail while preserving intent."),
-    SIMPLIFY("Simplify", "Rewrite using clear, simple language.")
+    SIMPLIFY("Simplify", "Rewrite using clear, simple language."),
+    CONFIDENT("Confident", "Rewrite with an assured, confident voice without sounding arrogant."),
+    EMPATHETIC("Empathetic", "Rewrite with warmth and understanding, acknowledging how the reader may feel."),
+    PERSUASIVE("Persuasive", "Rewrite so it is more convincing and compelling while staying honest."),
+    CASUAL("Casual", "Rewrite in a relaxed, everyday conversational tone."),
+    FORMAL("Formal", "Rewrite in a formal, businesslike register."),
+    ENTHUSIASTIC("Enthusiastic", "Rewrite with upbeat, enthusiastic energy.")
 }
 data class WritingResult(val text: String, val explanation: String? = null)
 sealed interface AssistantState {
