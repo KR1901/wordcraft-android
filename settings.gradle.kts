@@ -14,3 +14,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "WordCraft"
 include(":app")
+include(":probe")
