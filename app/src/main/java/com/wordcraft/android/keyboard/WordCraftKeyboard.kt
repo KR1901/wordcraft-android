@@ -519,7 +519,7 @@ class KeyboardController(
 fun WordCraftKeyboard(controller: KeyboardController) {
     WordCraftKeyboardTheme(controller.prefs.darkTheme) {
         Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
-            Box(Modifier.onGloballyPositioned { controller.setRootOrigin(it.positionInRoot()) }) {
+            Box(Modifier.onGloballyPositioned { controller.setRootOrigin(it.boundsInRoot().topLeft) }) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = 3.dp, vertical = 5.dp)) {
                     ToolbarRow(controller)
                     StripRow(controller)
