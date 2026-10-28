@@ -57,7 +57,9 @@ class KeyboardLifecycleOwner : LifecycleOwner, ViewModelStoreOwner {
         runCatching {
             val type = Class.forName(className)
             val method = type.getMethod("set", View::class.java, ownerType)
-            val receiver = runCatching { type.getField("INSTANCE").get(null) }.getOrNull()
+            // Kotlin object -> INSTANCE; a Java-style holder -> null for the static call.
+            val receiver = runCatching { type.getField("INSTANCE").get(null) }
+                .getOrElse { runCatching { type.getDeclaredConstructor().newInstance() }.getOrNull() }
             method.invoke(receiver, view, owner)
         }
     }
