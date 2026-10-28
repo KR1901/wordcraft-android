@@ -7,7 +7,7 @@ android {
     compileSdk = 37
     defaultConfig {
         applicationId = "com.wordcraft.android"
-        // No third-party JNI packages currently; keep filters ready for optional AI later.
+        // LiteRT-LM ships arm64-v8a and x86_64 only, so the APK ships the same two ABIs.
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
         }
@@ -31,6 +31,13 @@ android {
     }
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        jniLibs {
+            // Keep .so files extracted at install time instead of mmap'd straight out of the
+            // APK. Devices with strict page-size / loader rules can fail to map a library from
+            // inside an APK, and because the first native library loads during the first frame
+            // (vector icons), that failure shows up as an instant crash on open.
+            useLegacyPackaging = true
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -57,8 +64,9 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.datastore:datastore-preferences:1.2.0")
-    // LiteRT-LM intentionally omitted from the APK: its native .so files were crashing
-    // process start on Android 15/16 release installs. Re-add behind a dynamic feature later.
+    // On-device inference. Pinned on purpose: `latest.release` made builds non-reproducible.
+    // Nothing from this artifact is touched during startup — see LiteRtWritingAssistant.
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.18.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
