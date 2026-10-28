@@ -89,6 +89,46 @@ class WordEngine(context: Context) {
         save()
     }
 
+    // ------------------------------------------------------------ clipboard history
+
+    fun rememberClipboard(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
+        val updated = (listOf(trimmed) + clipboardHistory().filter { it != trimmed }).take(MAX_CLIPBOARD)
+        prefs.edit().putString(KEY_CLIPBOARD, updated.joinToString("\u0002")).apply()
+    }
+
+    fun clipboardHistory(): List<String> = prefs.getString(KEY_CLIPBOARD, null)
+        ?.split('\u0002')
+        ?.filter { it.isNotBlank() }
+        .orEmpty()
+
+    // ------------------------------------------------------------ personal dictionary
+
+    fun userWords(): List<String> = prefs.getString(KEY_USER_WORDS, null)
+        ?.split('\n')
+        ?.filter { it.isNotBlank() }
+        .orEmpty()
+
+    fun addUserWord(word: String) {
+        val clean = word.trim().lowercase(Locale.ROOT)
+        if (clean.length < 2) return
+        load()
+        val updated = (userWords() + clean).distinct()
+        prefs.edit().putString(KEY_USER_WORDS, updated.joinToString("\n")).apply()
+        // A personal word outranks anything learned, so it is offered and corrected first.
+        words[clean] = maxOf(words[clean] ?: 0, USER_WORD_WEIGHT)
+        save()
+    }
+
+    fun removeUserWord(word: String) {
+        val clean = word.trim().lowercase(Locale.ROOT)
+        val updated = userWords().filter { it != clean }
+        prefs.edit().putString(KEY_USER_WORDS, updated.joinToString("\n")).apply()
+        words.remove(clean)
+        save()
+    }
+
     fun recentEmojis(): List<String> = prefs.getString(KEY_EMOJI, null)
         ?.split('\u0001')
         ?.filter { it.isNotBlank() }
@@ -118,6 +158,9 @@ class WordEngine(context: Context) {
                     parts[1].toIntOrNull()?.let { count -> words[parts[0]] = count }
                 }
             }
+        }
+        userWords().forEach { word ->
+            words[word] = maxOf(words[word] ?: 0, USER_WORD_WEIGHT)
         }
         prefs.getString(KEY_BIGRAMS, null)?.let { raw ->
             raw.split('\n').forEach { line ->
@@ -175,6 +218,10 @@ class WordEngine(context: Context) {
         const val KEY_WORDS = "words"
         const val KEY_BIGRAMS = "bigrams"
         const val KEY_EMOJI = "emoji_recents"
+        const val KEY_CLIPBOARD = "clipboard_history"
+        const val KEY_USER_WORDS = "user_words"
+        const val MAX_CLIPBOARD = 12
+        const val USER_WORD_WEIGHT = 100
         const val SEP = '|'
         const val MAX_WORDS = 3000
 
