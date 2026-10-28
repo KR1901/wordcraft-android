@@ -18,6 +18,7 @@ object QwenModelStore {
     const val MODEL_URL =
         "https://huggingface.co/litert-community/Qwen3-0.6B-int4/resolve/main/$MODEL_NAME"
     private const val MIN_MODEL_BYTES = 100_000_000L
+    private const val PROGRESS_INTERVAL_MS = 250L
 
     fun modelFile(context: Context): File = File(context.filesDir, MODEL_NAME)
 
@@ -26,6 +27,12 @@ object QwenModelStore {
         return file.isFile && file.length() > MIN_MODEL_BYTES
     }
 
+    /**
+     * Downloads the model into app-private storage.
+     *
+     * [onProgress] is throttled to roughly four updates a second and is always invoked on the
+     * main thread, so callers can write it straight into UI state.
+     */
     suspend fun downloadModel(
         context: Context,
         onProgress: (downloadedBytes: Long, totalBytes: Long) -> Unit = { _, _ -> }
@@ -46,22 +53,28 @@ object QwenModelStore {
                 "Model download failed (HTTP ${connection.responseCode}). Check your connection and try again."
             }
             val total = connection.contentLengthLong
+            var downloaded = 0L
+            var lastReportedAt = 0L
             connection.inputStream.use { input ->
                 partial.outputStream().buffered().use { output ->
                     val buffer = ByteArray(DEFAULT_BUFFER_SIZE * 8)
-                    var downloaded = 0L
                     while (true) {
                         val count = input.read(buffer)
                         if (count < 0) break
                         output.write(buffer, 0, count)
                         downloaded += count
-                        onProgress(downloaded, total)
+                        val now = System.nanoTime() / 1_000_000
+                        if (now - lastReportedAt >= PROGRESS_INTERVAL_MS) {
+                            lastReportedAt = now
+                            publishProgress(onProgress, downloaded, total)
+                        }
                     }
                 }
             }
-            check(partial.length() > MIN_MODEL_BYTES) {
+            check(downloaded > MIN_MODEL_BYTES) {
                 "The downloaded model file is incomplete. Please try again."
             }
+            publishProgress(onProgress, downloaded, total)
             if (destination.exists()) destination.delete()
             check(partial.renameTo(destination)) { "Could not save the model to app storage." }
             destination
@@ -72,4 +85,10 @@ object QwenModelStore {
             connection.disconnect()
         }
     }
+
+    private suspend fun publishProgress(
+        onProgress: (downloadedBytes: Long, totalBytes: Long) -> Unit,
+        downloaded: Long,
+        total: Long
+    ) = withContext(Dispatchers.Main.immediate) { onProgress(downloaded, total) }
 }
