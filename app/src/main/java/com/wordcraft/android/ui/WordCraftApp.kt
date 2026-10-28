@@ -1,8 +1,8 @@
 package com.wordcraft.android.ui
 
+import android.content.Context
 import android.content.Intent
 import android.provider.Settings
-import android.content.Context
 import android.view.inputmethod.InputMethodManager
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
@@ -15,8 +15,8 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -46,6 +46,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,21 +64,61 @@ import androidx.compose.ui.unit.dp
 import com.wordcraft.android.ai.OnDeviceQwenWritingAssistant
 import com.wordcraft.android.ai.QwenModelStore
 import com.wordcraft.android.ai.WritingAction
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
+private const val DRAFT_PREFS = "wordcraft_documents"
+private const val DRAFT_KEY = "draft_default"
+private const val DRAFT_SAVE_DELAY_MS = 400L
+
+/**
+ * @param resumeTick changes every time the activity resumes, so system settings such as
+ *   "is this IME enabled" are re-read instead of being frozen at first composition.
+ * @param initialText draft handed over from the keyboard's Grammar/Rewrite buttons.
+ * @param initialAction action requested by the keyboard, if any.
+ */
 @Composable
-fun WordCraftApp() {
+fun WordCraftApp(
+    resumeTick: Int = 0,
+    initialText: String? = null,
+    initialAction: WritingAction? = null
+) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
-    val draftStore = remember(context) { context.getSharedPreferences("wordcraft_documents", 0) }
-    var draft by remember { mutableStateOf(draftStore.getString("draft_default", "Your words, only clearer.") ?: "") }
-    var chosenAction by remember { mutableStateOf(WritingAction.FIX_GRAMMAR) }
+    val draftStore = remember(context) { context.getSharedPreferences(DRAFT_PREFS, Context.MODE_PRIVATE) }
+    var draft by remember {
+        mutableStateOf(
+            initialText?.takeIf { it.isNotBlank() }
+                ?: draftStore.getString(DRAFT_KEY, "Your words, only clearer.") ?: ""
+        )
+    }
+    var chosenAction by remember { mutableStateOf(initialAction ?: WritingAction.FIX_GRAMMAR) }
     var showSetup by remember { mutableStateOf(false) }
-    val inputMethodManager = remember(context) { context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager }
+    val inputMethodManager = remember(context) {
+        context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+    }
     var keyboardEnabled by remember { mutableStateOf(false) }
-    androidx.compose.runtime.LaunchedEffect(Unit) {
-        val enabled = Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_INPUT_METHODS).orEmpty()
-        keyboardEnabled = enabled.split(':').any { it.contains(context.packageName) && it.contains("WordCraftInputMethodService") }
+    LaunchedEffect(resumeTick) {
+        val enabled = Settings.Secure.getString(
+            context.contentResolver,
+            Settings.Secure.ENABLED_INPUT_METHODS
+        ).orEmpty()
+        keyboardEnabled = enabled.split(':').any {
+            it.contains(context.packageName) && it.contains("WordCraftInputMethodService")
+        }
+    }
+    // Text handed over by the keyboard while this activity is already running.
+    LaunchedEffect(initialText, initialAction) {
+        if (!initialText.isNullOrBlank()) {
+            draft = initialText
+            initialAction?.let { chosenAction = it }
+        }
+    }
+    // Debounced persistence: avoids a disk write per keystroke and also stores AI rewrites.
+    LaunchedEffect(draft) {
+        delay(DRAFT_SAVE_DELAY_MS)
+        draftStore.edit().putString(DRAFT_KEY, draft).apply()
     }
     var notice by remember { mutableStateOf("Ready when you are.") }
     val scope = rememberCoroutineScope()
@@ -84,10 +126,12 @@ fun WordCraftApp() {
     var modelReady by remember { mutableStateOf(QwenModelStore.isModelDownloaded(context)) }
     var isDownloading by remember { mutableStateOf(false) }
     var isWorking by remember { mutableStateOf(false) }
-    var modelProgress by remember { mutableStateOf("Not downloaded") }
+    // A StateFlow, not plain state: download progress arrives from an IO thread.
+    val progressFlow = remember { MutableStateFlow("Not downloaded") }
+    val modelProgress by progressFlow.collectAsState()
 
     Scaffold(
-        contentWindowInsets = WindowInsets.navigationBars,
+        contentWindowInsets = WindowInsets.safeDrawing,
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = {
@@ -135,7 +179,7 @@ fun WordCraftApp() {
                         Text("${draft.length} chars", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     OutlinedTextField(
-                        value = draft, onValueChange = { draft = it; draftStore.edit().putString("draft_default", it).apply() },
+                        value = draft, onValueChange = { draft = it },
                         modifier = Modifier.fillMaxWidth().height(190.dp), shape = RoundedCornerShape(20.dp),
                         placeholder = { Text("Paste or write something…") },
                         supportingText = { Text("Your draft stays on this device until you choose an AI provider.") }
@@ -217,7 +261,7 @@ fun WordCraftApp() {
                         )
                         Text(
                             if (isDownloading) "Downloading model… $modelProgress"
-                            else if (modelReady) "Qwen3 is ready on this device."
+                            else if (modelReady) "Qwen3 model is saved on this device. On-device inference is temporarily disabled in this build."
                             else "Model status: $modelProgress",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -227,18 +271,18 @@ fun WordCraftApp() {
                             onClick = {
                                 scope.launch {
                                     isDownloading = true
-                                    modelProgress = "Starting download"
+                                    progressFlow.value = "Starting download"
                                     try {
                                         QwenModelStore.downloadModel(context) { downloaded, total ->
-                                            modelProgress = if (total > 0L) {
+                                            progressFlow.value = if (total > 0L) {
                                                 "${downloaded / 1_000_000} / ${total / 1_000_000} MB"
                                             } else "${downloaded / 1_000_000} MB downloaded"
                                         }
                                         modelReady = true
-                                        modelProgress = "Downloaded"
-                                        notice = "Qwen3 is ready. Writing improvements now run offline."
+                                        progressFlow.value = "Downloaded"
+                                        notice = "Qwen3 model saved. On-device inference is still disabled in this build."
                                     } catch (error: Throwable) {
-                                        modelProgress = error.message ?: "Download failed"
+                                        progressFlow.value = error.message ?: "Download failed"
                                     } finally {
                                         isDownloading = false
                                     }
