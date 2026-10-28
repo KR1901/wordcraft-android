@@ -80,17 +80,17 @@ class KeyboardSettingsActivity : ComponentActivity() {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(
                             selected = prefs.keyHeight == 0,
-                            onClick = { prefs.setKeyHeight(0) },
+                            onClick = { prefs.chooseKeyHeight(0) },
                             label = { Text("Compact") }
                         )
                         FilterChip(
                             selected = prefs.keyHeight == 1,
-                            onClick = { prefs.setKeyHeight(1) },
+                            onClick = { prefs.chooseKeyHeight(1) },
                             label = { Text("Normal") }
                         )
                         FilterChip(
                             selected = prefs.keyHeight == 2,
-                            onClick = { prefs.setKeyHeight(2) },
+                            onClick = { prefs.chooseKeyHeight(2) },
                             label = { Text("Tall") }
                         )
                     }
