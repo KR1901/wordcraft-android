@@ -94,6 +94,25 @@ class DiagnosticsActivity : Activity() {
             text = "Open the writing studio"
             setOnClickListener { forwardToStudio() }
         }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
+        root.addView(Button(this).apply {
+            text = "Dismiss report and continue"
+            setOnClickListener {
+                CrashReport.latest(this@DiagnosticsActivity)?.let { CrashReport.dismiss(this@DiagnosticsActivity, it) }
+                CrashReport.resetStudioAttempts(this@DiagnosticsActivity)
+                lastError = null
+                forwardToStudio()
+            }
+        }, LinearLayout.LayoutParams(-1, -2))
+        root.addView(Button(this).apply {
+            text = "Try the Compose studio (may crash)"
+            setOnClickListener {
+                runCatching { startActivity(Intent(this@DiagnosticsActivity, MainActivity::class.java)) }
+                    .onFailure { error ->
+                        lastError = error
+                        refresh()
+                    }
+            }
+        }, LinearLayout.LayoutParams(-1, -2))
         // Staged Compose bisection: tap them in order and note the first one that kills the app.
         listOf(
             1 to "Test 1: Compose basics",
@@ -164,9 +183,13 @@ class DiagnosticsActivity : Activity() {
         }
     }
 
-    /** Carries the launch intent's extras (the keyboard handoff) through to the studio. */
+    /**
+     * The framework-widget studio. Handing over here rather than to the Compose screen is what
+     * makes the app usable on a device where Compose cannot start; the Compose studio stays
+     * reachable from the button above.
+     */
     private fun studioIntent(): Intent =
-        Intent(this, MainActivity::class.java).also { it.putExtras(intent) }
+        Intent(this, SimpleStudioActivity::class.java).also { it.putExtras(intent) }
 
     private fun share() {
         val text = body.text.toString()
