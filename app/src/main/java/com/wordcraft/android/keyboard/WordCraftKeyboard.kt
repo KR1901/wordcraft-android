@@ -284,7 +284,7 @@ class KeyboardController(
 
     // ---------------------------------------------------------------- pages
 
-    fun setPage(newPage: Page) {
+    fun showPage(newPage: Page) {
         page = newPage
         alternatives = emptyList()
         if (newPage != Page.LETTERS) shift = Shift.OFF
@@ -577,7 +577,7 @@ private fun buildRows(controller: KeyboardController): List<List<KeySpec>> {
             },
             listOf(
                 KeySpec("=\\<", weight = 1.3f, style = KeyStyle.Function, fontSize = 14.sp,
-                    onTap = { controller.setPage(Page.SYMBOLS) }),
+                    onTap = { controller.showPage(Page.SYMBOLS) }),
                 KeySpec("\"", onTap = { controller.typeSymbol("\"") }),
                 KeySpec("'", onTap = { controller.typeSymbol("'") }),
                 KeySpec(":", onTap = { controller.typeSymbol(":") }),
@@ -587,7 +587,7 @@ private fun buildRows(controller: KeyboardController): List<List<KeySpec>> {
                 KeySpec("⌫", weight = 1.3f, style = KeyStyle.Function, onTap = { controller.deleteChar() },
                     onLong = { controller.startHoldDelete() }, holdDelete = true)
             ),
-            bottomRow(controller, "ABC", { controller.setPage(Page.LETTERS) })
+            bottomRow(controller, "ABC", { controller.showPage(Page.LETTERS) })
         )
         Page.SYMBOLS -> listOf(
             listOf("~", "`", "|", "•", "√", "π", "÷", "×", "¶", "∆").map { s ->
@@ -598,7 +598,7 @@ private fun buildRows(controller: KeyboardController): List<List<KeySpec>> {
             },
             listOf(
                 KeySpec("?123", weight = 1.3f, style = KeyStyle.Function, fontSize = 14.sp,
-                    onTap = { controller.setPage(Page.NUMBERS) }),
+                    onTap = { controller.showPage(Page.NUMBERS) }),
                 KeySpec("<", onTap = { controller.typeSymbol("<") }),
                 KeySpec(">", onTap = { controller.typeSymbol(">") }),
                 KeySpec("[", onTap = { controller.typeSymbol("[") }),
@@ -607,7 +607,7 @@ private fun buildRows(controller: KeyboardController): List<List<KeySpec>> {
                 KeySpec("⌫", weight = 1.3f, style = KeyStyle.Function, onTap = { controller.deleteChar() },
                     onLong = { controller.startHoldDelete() }, holdDelete = true)
             ),
-            bottomRow(controller, "ABC", { controller.setPage(Page.LETTERS) })
+            bottomRow(controller, "ABC", { controller.showPage(Page.LETTERS) })
         )
         else -> buildList {
             if (controller.prefs.numberRow) {
@@ -624,7 +624,7 @@ private fun buildRows(controller: KeyboardController): List<List<KeySpec>> {
                         onLong = { controller.startHoldDelete() }, holdDelete = true)
                 )
             )
-            add(bottomRow(controller, "?123", { controller.setPage(Page.NUMBERS) }))
+            add(bottomRow(controller, "?123", { controller.showPage(Page.NUMBERS) }))
         }
     }
 }
@@ -636,7 +636,7 @@ private fun bottomRow(
 ): List<KeySpec> = listOf(
     KeySpec(numberLabel, weight = 1.4f, style = KeyStyle.Function, fontSize = 13.sp, bottom = true, onTap = numberAction),
     KeySpec("☺", weight = 1f, style = KeyStyle.Function, bottom = true,
-        onTap = { controller.setPage(Page.EMOJI) }),
+        onTap = { controller.showPage(Page.EMOJI) }),
     KeySpec(",", weight = 1f, bottom = true, onTap = { controller.typeSymbol(",") },
         onLong = { controller.showAlternatives(listOf(";", ":", "-", "–")) }),
     KeySpec("space", weight = 4f, bottom = true, isSpace = true, onTap = { controller.space() }),
@@ -779,7 +779,7 @@ private fun EmojiPad(controller: KeyboardController) {
                 modifier = Modifier.weight(1.4f).height(44.dp),
                 style = KeyStyle.Function,
                 fontSize = 13.sp,
-                onTap = { controller.setPage(Page.LETTERS) },
+                onTap = { controller.showPage(Page.LETTERS) },
                 onLong = null,
                 holdDelete = false
             )
