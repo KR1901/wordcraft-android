@@ -38,6 +38,10 @@
             android:name=".SmokeActivity"
             android:exported="false" />
 
+        <activity
+            android:name=".KeyboardSettingsActivity"
+            android:exported="false" />
+
         <service
             android:name=".keyboard.WordCraftInputMethodService"
             android:label="WordCraft Keyboard"
