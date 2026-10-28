@@ -7,8 +7,6 @@ import android.graphics.Typeface;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Process;
-import android.system.Os;
-import android.system.OsConstants;
 import android.util.TypedValue;
 import android.widget.Button;
 import android.widget.LinearLayout;
@@ -104,12 +102,23 @@ public class ProbeActivity extends Activity {
         }
     }
 
+    /**
+     * Memory page size via reflection: OsConstants' constant name differs between SDK levels and
+     * a compile-time reference would break the build on the ones that spell it differently.
+     */
     private String pageSize() {
-        try {
-            return String.valueOf(Os.sysconf(OsConstants.SC_PAGE_SIZE));
-        } catch (Throwable t) {
-            return "unknown (" + t.getClass().getSimpleName() + ")";
+        for (String constant : new String[] {"SC_PAGESIZE", "SC_PAGE_SIZE"}) {
+            try {
+                Class<?> os = Class.forName("android.system.Os");
+                Class<?> constants = Class.forName("android.system.OsConstants");
+                int id = constants.getField(constant).getInt(null);
+                Object value = os.getMethod("sysconf", int.class).invoke(null, id);
+                return String.valueOf(value);
+            } catch (Throwable ignored) {
+                // try the next spelling
+            }
         }
+        return "unknown";
     }
 
     private static String join(String[] values) {
