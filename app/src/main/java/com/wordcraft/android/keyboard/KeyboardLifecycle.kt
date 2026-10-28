@@ -14,11 +14,15 @@ import androidx.lifecycle.ViewModelStoreOwner
  *   IllegalStateException: ViewTreeLifecycleOwner not found from android.widget.LinearLayout
  *     at WindowRecomposer_androidKt.createLifecycleAwareWindowRecomposer
  *
- * So the IME owns a lifecycle and publishes it into the view tree before the composition starts.
+ * Two details matter and both were wrong at first:
  *
- * The `ViewTreeLifecycleOwner` / `ViewTreeViewModelStoreOwner` accessors are bound reflectively:
- * they are not visible to Kotlin from this module in the lifecycle version this project resolves
- * (the import fails to compile), but they are public at the JVM level and stable across versions.
+ * 1. The recomposer looks the owner up **from the window's root view and walks upwards**, so the
+ *    owner has to sit on an ancestor of the ComposeView — in practice the IME window's decor view.
+ *    Tagging only the ComposeView is invisible to that lookup.
+ * 2. The `ViewTreeLifecycleOwner` accessors are file-level Kotlin functions with `@JvmName("set")`,
+ *    and they are not visible to Kotlin from this module on the lifecycle version this project
+ *    resolves. They are bound reflectively, with the raw view tag as a fallback, because the
+ *    accessor is literally `view.setTag(R.id.view_tree_lifecycle_owner, owner)`.
  */
 class KeyboardLifecycleOwner : LifecycleOwner, ViewModelStoreOwner {
     private val registry = LifecycleRegistry(this)
@@ -48,19 +52,36 @@ class KeyboardLifecycleOwner : LifecycleOwner, ViewModelStoreOwner {
         viewModelStore.clear()
     }
 
+    /** Publishes this owner into the view tree rooted at [view]. */
     fun attachTo(view: View) {
-        bind("androidx.lifecycle.ViewTreeLifecycleOwner", view, LifecycleOwner::class.java, this)
-        bind("androidx.lifecycle.ViewTreeViewModelStoreOwner", view, ViewModelStoreOwner::class.java, this)
+        bindOwner(view, "androidx.lifecycle.ViewTreeLifecycleOwner", "view_tree_lifecycle_owner",
+            LifecycleOwner::class.java, this)
+        bindOwner(view, "androidx.lifecycle.ViewTreeViewModelStoreOwner", "view_tree_view_model_store_owner",
+            ViewModelStoreOwner::class.java, this)
     }
 
-    private fun bind(className: String, view: View, ownerType: Class<*>, owner: Any) {
-        runCatching {
+    /** Whether the accessor can already see an owner from [root] — used to avoid an uncatchable crash. */
+    fun isVisibleFrom(root: View): Boolean = runCatching {
+        val type = Class.forName("androidx.lifecycle.ViewTreeLifecycleOwner")
+        type.getMethod("get", View::class.java).invoke(null, root) != null
+    }.getOrDefault(true)
+
+    private fun bindOwner(view: View, className: String, tagName: String, ownerType: Class<*>, owner: Any) {
+        // Preferred: call the public JVM method the accessor is compiled to.
+        val viaMethod = runCatching {
             val type = Class.forName(className)
             val method = type.getMethod("set", View::class.java, ownerType)
-            // Kotlin object -> INSTANCE; a Java-style holder -> null for the static call.
-            val receiver = runCatching { type.getField("INSTANCE").get(null) }
-                .getOrElse { runCatching { type.getDeclaredConstructor().newInstance() }.getOrNull() }
+            val receiver = runCatching { type.getField("INSTANCE").get(null) }.getOrNull()
             method.invoke(receiver, view, owner)
+            true
+        }.getOrDefault(false)
+        if (viaMethod) return
+
+        // Fallback: write the tag the accessor reads. Library resource ids are resolved by name.
+        runCatching {
+            val id = view.resources.getIdentifier(tagName, "id", view.context.packageName)
+            val resolved = if (id != 0) id else view.resources.getIdentifier(tagName, "id", "androidx.lifecycle.runtime")
+            if (resolved != 0) view.setTag(resolved, owner)
         }
     }
 }
