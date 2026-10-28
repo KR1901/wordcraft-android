@@ -19,9 +19,8 @@ import android.widget.TextView
  *
  * The screen is always drawn first, and only then does it hand over to the writing studio. That
  * ordering matters: if loading the studio's classes fails, the failure is displayed here instead
- * of the process dying before anything is on screen. If the studio is opened and never comes up,
- * the next launch stays here and shows whatever evidence exists — our uncaught-exception log, the
- * system's process-exit record (which covers native crashes), and the launch counter.
+ * of the process dying before anything is on screen. Once a crash has been recorded it stops
+ * handing over automatically, so a crash loop cannot hide the report.
  */
 class DiagnosticsActivity : Activity() {
     private var forwarded = false
@@ -36,7 +35,8 @@ class DiagnosticsActivity : Activity() {
             showFallback(error)
             return
         }
-        if (CrashReport.studioAttempts(this) == 0) {
+        val healthy = CrashReport.studioAttempts(this) == 0 && CrashReport.latest(this) == null
+        if (healthy) {
             // Healthy state: draw this screen, then get out of the way like a normal launcher.
             Handler(Looper.getMainLooper()).postDelayed({ forwardToStudio() }, 500)
         }
@@ -94,6 +94,24 @@ class DiagnosticsActivity : Activity() {
             text = "Open the writing studio"
             setOnClickListener { forwardToStudio() }
         }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(16) })
+        // Staged Compose bisection: tap them in order and note the first one that kills the app.
+        listOf(
+            1 to "Test 1: Compose basics",
+            2 to "Test 2: + icons",
+            3 to "Test 3: + scaffold, insets, text field",
+            4 to "Test 4: + clipboard, prefs, model, crash report"
+        ).forEach { (stage, label) ->
+            root.addView(Button(this).apply {
+                text = label
+                setOnClickListener {
+                    runCatching { startActivity(SmokeActivity.intentFor(this@DiagnosticsActivity, stage)) }
+                        .onFailure { error ->
+                            lastError = error
+                            refresh()
+                        }
+                }
+            }, LinearLayout.LayoutParams(-1, -2))
+        }
         root.addView(Button(this).apply {
             text = "Share this report"
             setOnClickListener { share() }
@@ -127,11 +145,10 @@ class DiagnosticsActivity : Activity() {
         val attempts = CrashReport.studioAttempts(this)
         val explanation = when {
             lastError != null -> "Starting the studio failed inside this process:"
-            report != null -> "Recorded failure:"
+            report != null -> "Last failure:"
             attempts > 0 -> "No crash record was written, but the studio was opened " +
                 "${attempts}x without ever reaching the screen. That points at the process being " +
-                "killed before Android could record a reason — a missing or unmappable native " +
-                "library is the usual cause."
+                "killed before Android could record a reason."
             else -> "No failures recorded."
         }
         body.text = buildString {
@@ -139,7 +156,11 @@ class DiagnosticsActivity : Activity() {
             appendLine()
             appendLine(explanation)
             appendLine()
-            appendLine(lastError?.let { it.stackTraceToString() } ?: report?.text ?: "(no stack trace available)")
+            appendLine(
+                lastError?.let { it.stackTraceToString() }
+                    ?: report?.text
+                    ?: "(no stack trace available)"
+            )
         }
     }
 
