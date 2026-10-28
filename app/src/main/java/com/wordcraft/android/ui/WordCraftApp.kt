@@ -222,12 +222,7 @@ fun WordCraftApp(
                         supportingText = { Text("Your draft stays on this device. Nothing is uploaded.") }
                     )
                     Text("Improve your writing", style = MaterialTheme.typography.titleSmall)
-                    val rows = listOf(
-                        listOf(WritingAction.FIX_GRAMMAR, WritingAction.PARAPHRASE),
-                        listOf(WritingAction.PROFESSIONAL, WritingAction.FRIENDLY),
-                        listOf(WritingAction.CONCISE, WritingAction.SIMPLIFY),
-                        listOf(WritingAction.EXPAND)
-                    )
+                    val rows = WritingAction.entries.chunked(2)
                     rows.forEach { row ->
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                             row.forEach { action ->
