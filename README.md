@@ -27,6 +27,23 @@ The model is served from the [LiteRT Community Qwen3-0.6B-int4 repository](https
 1. **Never touch LiteRT from a startup path.** All LiteRT imports live in `LiteRtWritingAssistant`, which is instantiated only when the user runs a writing action. If a device cannot load the runtime, the studio shows a message and the rest of the app keeps working.
 2. **Keep `packaging { jniLibs { useLegacyPackaging = true } }`.** It extracts `.so` files at install time instead of mapping them out of the APK. The first native library loads during the first frame (vector icons), so a loader that cannot map a library from inside the APK turns into an instant crash on open — the failure mode this project hit before.
 
+## The startup crash on Android 14+ (root cause)
+
+Every build up to 0.1.17 died on launch on Android 14+ with:
+
+```
+java.lang.SecurityException: Settings key: <enabled_input_methods> is only readable
+  to apps with targetSdkVersion lower than or equal to: 33
+    at com.wordcraft.android.ui.WordCraftAppKt$WordCraftApp$1$1.invokeSuspend(WordCraftApp.kt:106)
+```
+
+The studio read `Settings.Secure.ENABLED_INPUT_METHODS` to label its keyboard button. Android
+denies that key to apps targeting SDK 34+, so the read threw inside a `LaunchedEffect` on the first
+frame — after `onResume`, before any pixels, which is why it looked like an instant crash with no
+window. It never reproduced on the API 30 CI emulator because the restriction does not exist
+there. `InputMethodManager.getEnabledInputMethodList()` reports the same thing publicly and is now
+used instead. Do not reintroduce the `Settings.Secure` read.
+
 ## Two studios
 
 The default studio (`SimpleStudioActivity`) is built from framework widgets only — no Compose, no
