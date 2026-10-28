@@ -183,12 +183,12 @@ class SimpleStudioActivity : Activity() {
                         "Downloading model… ${downloaded / 1_000_000} MB"
                     }
                 }
-                status.text = "${QwenModelStore.active(this).label} is ready. Everything now runs offline."
+                status.text = "${QwenModelStore.active(this@SimpleStudioActivity).label} is ready. Everything now runs offline."
                 downloadButton.text = "Model downloaded"
             } catch (error: Throwable) {
                 status.text = error.message ?: "Download failed."
                 downloadButton.isEnabled = true
-                downloadButton.text = "Download ${QwenModelStore.active(this).label}"
+                downloadButton.text = "Download ${QwenModelStore.active(this@SimpleStudioActivity).label}"
             }
         }
     }
