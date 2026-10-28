@@ -27,6 +27,14 @@ The model is served from the [LiteRT Community Qwen3-0.6B-int4 repository](https
 1. **Never touch LiteRT from a startup path.** All LiteRT imports live in `LiteRtWritingAssistant`, which is instantiated only when the user runs a writing action. If a device cannot load the runtime, the studio shows a message and the rest of the app keeps working.
 2. **Keep `packaging { jniLibs { useLegacyPackaging = true } }`.** It extracts `.so` files at install time instead of mapping them out of the APK. The first native library loads during the first frame (vector icons), so a loader that cannot map a library from inside the APK turns into an instant crash on open — the failure mode this project hit before.
 
+## Two studios
+
+The default studio (`SimpleStudioActivity`) is built from framework widgets only — no Compose, no
+androidx, no theme resources — and does the full job: draft, action picker, on-device rewrite,
+copy, model download. The Compose studio (`MainActivity`) is still there and reachable from
+Diagnostics, but it is not on the launch path until the Compose startup failure on Android 16 is
+resolved. `SmokeActivity` provides four staged Compose tests that isolate which ingredient fails.
+
 ## If the app crashes on launch
 
 The launcher is a plain framework-widget screen (`DiagnosticsActivity`) with no Compose, no startup
