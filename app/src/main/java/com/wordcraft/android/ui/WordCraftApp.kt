@@ -26,6 +26,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Keyboard
@@ -59,8 +60,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.wordcraft.android.CrashReport
 import com.wordcraft.android.ai.OnDeviceQwenWritingAssistant
 import com.wordcraft.android.ai.QwenModelStore
 import com.wordcraft.android.ai.WritingAction
@@ -129,6 +132,9 @@ fun WordCraftApp(
     // A StateFlow, not plain state: download progress arrives from an IO thread.
     val progressFlow = remember { MutableStateFlow("Not downloaded") }
     val modelProgress by progressFlow.collectAsState()
+    // Why the previous run ended, if it ended badly. Read once, on the main thread, from a
+    // small file plus the system's process-exit history.
+    var crashReport by remember(context) { mutableStateOf(CrashReport.latest(context)) }
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
@@ -163,6 +169,43 @@ fun WordCraftApp(
                 TextButton(onClick = { showSetup = !showSetup }) { Icon(Icons.Rounded.Settings, contentDescription = "Settings") }
             }
 
+            crashReport?.let { report ->
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+                ) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Rounded.BugReport, contentDescription = null, tint = MaterialTheme.colorScheme.onErrorContainer)
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "Previous session crashed",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                        Text(
+                            report.text,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            maxLines = 18
+                        )
+                        Row {
+                            TextButton(onClick = {
+                                clipboard.setText(AnnotatedString(report.text))
+                                notice = "Crash details copied."
+                            }) { Text("Copy details") }
+                            TextButton(onClick = {
+                                CrashReport.dismiss(context, report)
+                                crashReport = null
+                            }) { Text("Dismiss") }
+                        }
+                    }
+                }
+            }
+
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("A little more you.", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                 Text("A thoughtful writing space for clearer messages, better sentences, and your own voice.",
@@ -182,7 +225,7 @@ fun WordCraftApp(
                         value = draft, onValueChange = { draft = it },
                         modifier = Modifier.fillMaxWidth().height(190.dp), shape = RoundedCornerShape(20.dp),
                         placeholder = { Text("Paste or write something…") },
-                        supportingText = { Text("Your draft stays on this device until you choose an AI provider.") }
+                        supportingText = { Text("Your draft stays on this device. Nothing is uploaded.") }
                     )
                     Text("Improve your writing", style = MaterialTheme.typography.titleSmall)
                     val rows = listOf(
@@ -261,7 +304,7 @@ fun WordCraftApp(
                         )
                         Text(
                             if (isDownloading) "Downloading model… $modelProgress"
-                            else if (modelReady) "Qwen3 model is saved on this device. On-device inference is temporarily disabled in this build."
+                            else if (modelReady) "Qwen3 is ready on this device. The first rewrite takes a few seconds while weights load."
                             else "Model status: $modelProgress",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -280,7 +323,7 @@ fun WordCraftApp(
                                         }
                                         modelReady = true
                                         progressFlow.value = "Downloaded"
-                                        notice = "Qwen3 model saved. On-device inference is still disabled in this build."
+                                        notice = "Qwen3 is ready. Writing improvements now run offline."
                                     } catch (error: Throwable) {
                                         progressFlow.value = error.message ?: "Download failed"
                                     } finally {
