@@ -8,40 +8,58 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * File-only helpers for the on-device Qwen model.
- * Intentionally has **no** LiteRT / native imports so UI and status checks
- * never load native libraries at process start.
+ * Download and storage for the on-device models.
+ *
+ * File-only helpers: **no** LiteRT / native imports, so UI and status checks never load native
+ * libraries at process start. Each model is a separate file in app-private storage, so several can
+ * coexist and the user can switch between them without re-downloading.
  */
 object QwenModelStore {
-    const val MODEL_NAME = "qwen3_0.6b_nothink_q4_block32_ekv1280.litertlm"
-    const val MODEL_SIZE_LABEL = "about 347 MB"
-    const val MODEL_URL =
-        "https://huggingface.co/litert-community/Qwen3-0.6B-int4/resolve/main/$MODEL_NAME"
-    private const val MIN_MODEL_BYTES = 100_000_000L
+    private const val PREFS = "wordcraft_models"
+    private const val KEY_ACTIVE = "active_model"
     private const val PROGRESS_INTERVAL_MS = 250L
 
-    fun modelFile(context: Context): File = File(context.filesDir, MODEL_NAME)
+    fun active(context: Context): LocalModel = LocalModel.fromId(
+        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_ACTIVE, null)
+    )
 
-    fun isModelDownloaded(context: Context): Boolean {
-        val file = modelFile(context)
-        return file.isFile && file.length() > MIN_MODEL_BYTES
+    fun setActive(context: Context, model: LocalModel) {
+        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putString(KEY_ACTIVE, model.id).apply()
+    }
+
+    fun modelFile(context: Context, model: LocalModel = active(context)): File =
+        File(context.filesDir, model.fileName)
+
+    fun isModelDownloaded(context: Context, model: LocalModel = active(context)): Boolean {
+        val file = modelFile(context, model)
+        return file.isFile && file.length() >= model.minimumBytes
+    }
+
+    fun downloadedModels(context: Context): List<LocalModel> =
+        LocalModel.entries.filter { isModelDownloaded(context, it) }
+
+    fun delete(context: Context, model: LocalModel) {
+        runCatching { modelFile(context, model).delete() }
     }
 
     /**
-     * Downloads the model into app-private storage.
+     * Downloads [model] into app-private storage.
      *
      * [onProgress] is throttled to roughly four updates a second and is always invoked on the
      * main thread, so callers can write it straight into UI state.
      */
     suspend fun downloadModel(
         context: Context,
+        model: LocalModel = active(context),
         onProgress: (downloadedBytes: Long, totalBytes: Long) -> Unit = { _, _ -> }
     ): File = withContext(Dispatchers.IO) {
-        val destination = modelFile(context)
-        if (isModelDownloaded(context)) return@withContext destination
+        val destination = modelFile(context, model)
+        if (isModelDownloaded(context, model)) return@withContext destination
 
-        val partial = File(context.filesDir, "$MODEL_NAME.part")
-        val connection = (URL(MODEL_URL).openConnection() as HttpURLConnection).apply {
+        val partial = File(context.filesDir, "${model.fileName}.part")
+        val connection = (URL(model.url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 20_000
             readTimeout = 60_000
             instanceFollowRedirects = true
@@ -50,7 +68,7 @@ object QwenModelStore {
         try {
             connection.connect()
             check(connection.responseCode in 200..299) {
-                "Model download failed (HTTP ${connection.responseCode}). Check your connection and try again."
+                "Download failed (HTTP ${connection.responseCode}). Check your connection and try again."
             }
             val total = connection.contentLengthLong
             var downloaded = 0L
@@ -71,8 +89,8 @@ object QwenModelStore {
                     }
                 }
             }
-            check(downloaded > MIN_MODEL_BYTES) {
-                "The downloaded model file is incomplete. Please try again."
+            check(downloaded >= model.minimumBytes) {
+                "The downloaded file is incomplete (${downloaded / 1_000_000} MB of ${model.sizeLabel}). Please try again."
             }
             publishProgress(onProgress, downloaded, total)
             if (destination.exists()) destination.delete()
