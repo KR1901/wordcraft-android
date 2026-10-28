@@ -2,7 +2,7 @@ package com.wordcraft.android.keyboard
 
 import android.view.View
 import android.view.inputmethod.EditorInfo
-import android.view.inputmethod.InputMethodService
+import android.inputmethodservice.InputMethodService
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 
