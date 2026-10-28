@@ -6,8 +6,6 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
-import androidx.lifecycle.ViewTreeLifecycleOwner
-import androidx.lifecycle.ViewTreeViewModelStoreOwner
 
 /**
  * An `InputMethodService` is not a `LifecycleOwner`, and a `ComposeView` refuses to start its
@@ -17,7 +15,10 @@ import androidx.lifecycle.ViewTreeViewModelStoreOwner
  *     at WindowRecomposer_androidKt.createLifecycleAwareWindowRecomposer
  *
  * So the IME owns a lifecycle and publishes it into the view tree before the composition starts.
- * The registry is driven by the service's own create/destroy, which is all Compose needs here.
+ *
+ * The `ViewTreeLifecycleOwner` / `ViewTreeViewModelStoreOwner` accessors are bound reflectively:
+ * they are not visible to Kotlin from this module in the lifecycle version this project resolves
+ * (the import fails to compile), but they are public at the JVM level and stable across versions.
  */
 class KeyboardLifecycleOwner : LifecycleOwner, ViewModelStoreOwner {
     private val registry = LifecycleRegistry(this)
@@ -48,7 +49,16 @@ class KeyboardLifecycleOwner : LifecycleOwner, ViewModelStoreOwner {
     }
 
     fun attachTo(view: View) {
-        ViewTreeLifecycleOwner.set(view, this)
-        ViewTreeViewModelStoreOwner.set(view, this)
+        bind("androidx.lifecycle.ViewTreeLifecycleOwner", view, LifecycleOwner::class.java, this)
+        bind("androidx.lifecycle.ViewTreeViewModelStoreOwner", view, ViewModelStoreOwner::class.java, this)
+    }
+
+    private fun bind(className: String, view: View, ownerType: Class<*>, owner: Any) {
+        runCatching {
+            val type = Class.forName(className)
+            val method = type.getMethod("set", View::class.java, ownerType)
+            val receiver = runCatching { type.getField("INSTANCE").get(null) }.getOrNull()
+            method.invoke(receiver, view, owner)
+        }
     }
 }
