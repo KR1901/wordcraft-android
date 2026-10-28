@@ -76,6 +76,25 @@ class KeyboardSettingsActivity : ComponentActivity() {
                         }
                     }
 
+                    Text("Key height", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = prefs.keyHeight == 0,
+                            onClick = { prefs.setKeyHeight(0) },
+                            label = { Text("Compact") }
+                        )
+                        FilterChip(
+                            selected = prefs.keyHeight == 1,
+                            onClick = { prefs.setKeyHeight(1) },
+                            label = { Text("Normal") }
+                        )
+                        FilterChip(
+                            selected = prefs.keyHeight == 2,
+                            onClick = { prefs.setKeyHeight(2) },
+                            label = { Text("Tall") }
+                        )
+                    }
+
                     Text("Theme", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(
