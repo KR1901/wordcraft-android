@@ -1,6 +1,8 @@
 package com.wordcraft.android
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
@@ -40,9 +42,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Reaching here means the studio actually came up; clear the diagnostics launch counter.
-        CrashReport.noteStudioAlive(this)
         resumeTick++
+        // Clear the diagnostics launch counter only once the studio has survived its first frames.
+        // Doing it in onResume alone meant a crash during the first composition still counted as a
+        // healthy launch, which turned the failure into a crash loop that hid the report.
+        Handler(Looper.getMainLooper()).postDelayed({ CrashReport.noteStudioAlive(this) }, 1500)
     }
 
     override fun onNewIntent(intent: Intent) {
