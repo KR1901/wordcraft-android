@@ -42,6 +42,10 @@
             android:name=".KeyboardSettingsActivity"
             android:exported="false" />
 
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false" />
+
         <service
             android:name=".keyboard.WordCraftInputMethodService"
             android:label="WordCraft Keyboard"
