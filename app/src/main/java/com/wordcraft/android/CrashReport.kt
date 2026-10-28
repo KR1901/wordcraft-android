@@ -9,42 +9,56 @@ import java.io.PrintWriter
 import java.io.StringWriter
 
 /**
- * Explains why the previous run ended, and whether the studio survived being opened.
+ * Explains why the previous run ended.
  *
- * A startup crash is exactly the case where the user cannot reach any UI, so this records
- * three things: our own uncaught-exception log (written by [WordCraftApplication]), the
- * system's process-exit history (Android 11+, which also reports *native* crashes with the
- * tombstone trace), and a launch counter that proves the studio was opened and never came up
- * even when neither of the first two has anything to say.
+ * Two independent sources are shown together, because either one alone can be useless:
+ * our own uncaught-exception log carries the real stack trace but only exists if the handler
+ * was installed, and the system's process-exit history always exists on Android 11+ but often
+ * reports nothing more than "Description: crash".
  */
 object CrashReport {
     private const val CRASH_FILE = "last_crash.txt"
     private const val DISMISSED_FILE = "last_crash_dismissed.txt"
     private const val ATTEMPTS_FILE = "studio_attempts.txt"
-    private const val MAX_CHARS = 4000
+    private const val MAX_CHARS = 6000
     private const val MAX_EXIT_TRACE_CHARS = 2500
 
     data class Report(val text: String, val at: Long)
 
     fun record(context: Context, error: Throwable) {
         val stack = StringWriter().also { writer -> error.printStackTrace(PrintWriter(writer)) }
-        runCatching {
-            File(context.filesDir, CRASH_FILE).writeText(
-                "Uncaught ${error.javaClass.name}: ${error.message}\n\n${stack.toString().take(MAX_CHARS)}"
-            )
+        val text = buildString {
+            appendLine("Thread: ${Thread.currentThread().name}")
+            appendLine("When: ${System.currentTimeMillis()}")
+            appendLine("Uncaught ${error.javaClass.name}: ${error.message}")
+            appendLine()
+            append(stack.toString())
         }
+        runCatching { File(context.filesDir, CRASH_FILE).writeText(text.take(MAX_CHARS)) }
     }
 
-    /** The most recent unreported crash, or null when there is nothing new to show. */
+    /** Everything known about the previous failure, or null when there is nothing new. */
     fun latest(context: Context): Report? {
         val dismissedAt = dismissedAt(context)
-        val candidates = buildList {
-            javaCrash(context)?.let(::add)
-            systemExit(context)?.let(::add)
-        }
-        val newest = candidates.filter { it.at > dismissedAt }.maxByOrNull { it.at } ?: return null
-        return Report(newest.text.take(MAX_CHARS), newest.at)
+        val java = javaCrash(context)
+        val system = systemExit(context)
+        val newestAt = maxOf(java?.at ?: 0L, system?.at ?: 0L)
+        if (newestAt == 0L || newestAt <= dismissedAt) return null
+        val text = buildString {
+            if (java != null) {
+                appendLine("=== In-app handler (real stack trace) ===")
+                appendLine(java.text)
+                appendLine()
+            }
+            if (system != null) {
+                appendLine("=== Android's process-exit record ===")
+                appendLine(system.text)
+            }
+        }.trim()
+        return Report(text.take(MAX_CHARS), newestAt)
     }
+
+    fun hasJavaCrash(context: Context): Boolean = javaCrash(context) != null
 
     fun dismiss(context: Context, report: Report) {
         runCatching { File(context.filesDir, DISMISSED_FILE).writeText(report.at.toString()) }
@@ -115,5 +129,6 @@ object CrashReport {
         appendLine("Android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
         appendLine("ABIs: ${Build.SUPPORTED_ABIS.joinToString()}")
         appendLine("Studio launches that never came up: ${studioAttempts(context)}")
+        appendLine("In-app crash log present: ${hasJavaCrash(context)}")
     }.trimEnd()
 }
