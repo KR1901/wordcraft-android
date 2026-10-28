@@ -40,6 +40,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Reaching here means the studio actually came up; clear the diagnostics launch counter.
+        CrashReport.noteStudioAlive(this)
         resumeTick++
     }
 
