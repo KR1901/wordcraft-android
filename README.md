@@ -6,18 +6,22 @@ A modern Android writing assistant and keyboard scaffold built with Jetpack Comp
 
 - Compose writing studio with Material 3, system light/dark mode, editable draft, character count, clipboard copy, selectable writing actions, and keyboard setup shortcut.
 - Native Android keyboard (IME) foundation with letters, basic punctuation, delete, return, space, and a toolbar shell for writing tools.
-- On-device Qwen3 0.6B INT4 writing assistant via LiteRT-LM, with model download in Settings and local inference for grammar correction, paraphrasing, tone changes, simplification, concise rewrites, and expansion.
+- On-device Qwen3 0.6B INT4 model download in Settings. Inference through LiteRT-LM is temporarily disabled in this build (see limitations), so writing actions report that clearly instead of pretending to run.
 - GitHub Actions CI that runs tests and uploads a debug APK artifact on pushes to `main`.
 - Tagged APK release workflow that builds and attaches an APK to a GitHub Release.
 - Unit tests for action metadata and unconfigured-provider behavior.
 
 ## Current scope and limitations
 
-This is a starting implementation, not yet a complete commercial keyboard. The IME is a simple keyboard foundation; shift/number layouts, predictions, swipe typing, clipboard history, custom themes, and in-keyboard AI suggestions still need implementation. The writing studio can run writing actions with the optional local Qwen model once downloaded.
+This is a starting implementation, not yet a complete commercial keyboard. The IME is a simple keyboard foundation with shift, number and symbol layouts plus a small autocorrect strip; predictions, swipe typing, clipboard history, custom themes, and in-keyboard AI suggestions still need implementation. The writing studio and model download work; on-device inference is temporarily disabled while LiteRT native library stability on Android 15/16 is investigated.
 
-## On-device AI\n\nWordCraft uses Google AI Edge LiteRT-LM to run the Apache-2.0 Qwen3 0.6B INT4 model locally. Open **Settings → Download Qwen3 model** to download the model (approximately 347 MB) once. It is stored in the app-private files directory, excluded from the APK, and can then run without an internet connection. The first inference loads model weights and may take several seconds; CPU speed and RAM use depend on the phone. The download requires an internet connection.\n\nThe model is served from the [LiteRT Community Qwen3-0.6B-int4 repository](https://huggingface.co/litert-community/Qwen3-0.6B-int4). Review its model card and license before redistribution. No provider API key is needed, and draft text is not sent to a remote inference API. A future cloud-provider option should use an authenticated HTTPS backend and explicit user consent.
+## On-device AI
 
-The release workflow currently produces an **unsigned** release APK. Configure signing secrets and a protected signing step before distributing a signed production release. Debug APKs are signed automatically for testing.
+WordCraft uses Google AI Edge LiteRT-LM to run the Apache-2.0 Qwen3 0.6B INT4 model locally. Open **Settings → Download Qwen3 model** to download the model (approximately 347 MB) once. It is stored in the app-private files directory, excluded from the APK, and can then run without an internet connection. The first inference loads model weights and may take several seconds; CPU speed and RAM use depend on the phone. The download requires an internet connection.
+
+The model is served from the [LiteRT Community Qwen3-0.6B-int4 repository](https://huggingface.co/litert-community/Qwen3-0.6B-int4). Review its model card and license before redistribution. No provider API key is needed, and draft text is not sent to a remote inference API. A future cloud-provider option should use an authenticated HTTPS backend and explicit user consent.
+
+The release workflow currently produces a **debug-signed** release APK (`signingConfig = signingConfigs.getByName("debug")`), which is installable for testing but not suitable for store distribution. Configure a real signing key and secrets before publishing a production release.
 
 ## Versions
 
@@ -36,7 +40,7 @@ Pinned versions from October 2026 release information:
 3. Download `wordcraft-debug-apk`.
 4. Extract the ZIP and install the APK. Android may ask you to allow installation from that source.
 
-To create a GitHub Release, push a tag such as `v0.1.0`, or manually run **Release APK** in Actions. The release APK is unsigned until signing is configured.
+To create a GitHub Release, push a tag such as `v0.1.0`, or manually run **Release APK** in Actions. The release APK is debug-signed until a real signing key is configured.
 
 ## Enable the keyboard
 
