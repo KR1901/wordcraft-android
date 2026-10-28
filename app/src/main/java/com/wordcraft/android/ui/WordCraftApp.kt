@@ -103,13 +103,7 @@ fun WordCraftApp(
     }
     var keyboardEnabled by remember { mutableStateOf(false) }
     LaunchedEffect(resumeTick) {
-        val enabled = Settings.Secure.getString(
-            context.contentResolver,
-            Settings.Secure.ENABLED_INPUT_METHODS
-        ).orEmpty()
-        keyboardEnabled = enabled.split(':').any {
-            it.contains(context.packageName) && it.contains("WordCraftInputMethodService")
-        }
+        keyboardEnabled = isOurKeyboardEnabled(context)
     }
     // Text handed over by the keyboard while this activity is already running.
     LaunchedEffect(initialText, initialAction) {
@@ -352,6 +346,20 @@ fun WordCraftApp(
         }
     }
 }
+
+/**
+ * Whether the WordCraft IME is currently enabled.
+ *
+ * Do **not** read Settings.Secure.ENABLED_INPUT_METHODS here: Android denies that key to apps
+targeting SDK 34+ and throws SecurityException("Settings key: <enabled_input_methods> is only
+readable to apps with targetSdkVersion lower than or equal to: 33"). That exception is thrown on
+the first frame, so it looks like "the app crashes on open" — it was the startup crash on Android
+14+ until this was replaced. InputMethodManager exposes the same information publicly.
+ */
+private fun isOurKeyboardEnabled(context: Context): Boolean = runCatching {
+    val manager = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+    manager.enabledInputMethodList.any { it.packageName == context.packageName }
+}.getOrDefault(false)
 
 @Composable
 private fun FeatureCard(title: String, subtitle: String, modifier: Modifier = Modifier, icon: @Composable () -> Unit) {
