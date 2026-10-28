@@ -26,6 +26,9 @@ class KeyboardPrefs(context: Context) {
     var autoCorrect by mutableStateOf(prefs.getBoolean(KEY_AUTOCORRECT, true))
     var suggestionsEnabled by mutableStateOf(prefs.getBoolean(KEY_SUGGESTIONS, true))
 
+    /** 0 = compact, 1 = normal, 2 = tall. */
+    var keyHeight by mutableStateOf(prefs.getInt(KEY_HEIGHT, 1))
+
     /** Re-reads the stored values, so a live keyboard picks up changes made in settings. */
     fun reload() {
         darkTheme = if (prefs.contains(KEY_DARK)) prefs.getBoolean(KEY_DARK, false) else null
@@ -36,6 +39,12 @@ class KeyboardPrefs(context: Context) {
         autoCapitalize = prefs.getBoolean(KEY_AUTO_CAPS, true)
         autoCorrect = prefs.getBoolean(KEY_AUTOCORRECT, true)
         suggestionsEnabled = prefs.getBoolean(KEY_SUGGESTIONS, true)
+        keyHeight = prefs.getInt(KEY_HEIGHT, 1)
+    }
+
+    fun setKeyHeight(value: Int) {
+        keyHeight = value.coerceIn(0, 2)
+        prefs.edit().putInt(KEY_HEIGHT, keyHeight).apply()
     }
 
     fun setTheme(dark: Boolean?) {
@@ -66,5 +75,6 @@ class KeyboardPrefs(context: Context) {
         const val KEY_AUTO_CAPS = "auto_capitalize"
         const val KEY_AUTOCORRECT = "auto_correct"
         const val KEY_SUGGESTIONS = "suggestions_enabled"
+        const val KEY_HEIGHT = "key_height"
     }
 }
