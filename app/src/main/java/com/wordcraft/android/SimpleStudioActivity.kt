@@ -45,6 +45,7 @@ class SimpleStudioActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val prefs = getSharedPreferences("wordcraft_documents", MODE_PRIVATE)
+        val model = QwenModelStore.active(this)
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -58,9 +59,9 @@ class SimpleStudioActivity : Activity() {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             setPadding(0, dp(6), 0, dp(14))
             text = if (QwenModelStore.isModelDownloaded(this@SimpleStudioActivity)) {
-                "Qwen3 is ready on this device."
+                "${model.label} is ready on this device."
             } else {
-                "Download the Qwen3 model (about 347 MB) once, then everything runs offline."
+                "Download ${model.label} (${model.sizeLabel}) once, then everything runs offline."
             }
         }
         root.addView(status)
@@ -106,7 +107,7 @@ class SimpleStudioActivity : Activity() {
             text = if (QwenModelStore.isModelDownloaded(this@SimpleStudioActivity)) {
                 "Model downloaded"
             } else {
-                "Download Qwen3 model"
+                "Download ${model.label}"
             }
             setOnClickListener { downloadModel() }
         }
@@ -145,7 +146,7 @@ class SimpleStudioActivity : Activity() {
             return
         }
         if (!QwenModelStore.isModelDownloaded(this)) {
-            status.text = "Download the Qwen3 model first (button below)."
+            status.text = "Download a model in WordCraft settings first."
             return
         }
         val action = actions.getOrNull(actionPicker.selectedItemPosition) ?: WritingAction.FIX_GRAMMAR
@@ -168,7 +169,7 @@ class SimpleStudioActivity : Activity() {
 
     private fun downloadModel() {
         if (QwenModelStore.isModelDownloaded(this)) {
-            status.text = "Qwen3 is already on this device."
+            status.text = "${model.label} is already on this device."
             return
         }
         downloadButton.isEnabled = false
@@ -182,12 +183,12 @@ class SimpleStudioActivity : Activity() {
                         "Downloading model… ${downloaded / 1_000_000} MB"
                     }
                 }
-                status.text = "Qwen3 is ready. Everything now runs offline."
+                status.text = "${model.label} is ready. Everything now runs offline."
                 downloadButton.text = "Model downloaded"
             } catch (error: Throwable) {
                 status.text = error.message ?: "Download failed."
                 downloadButton.isEnabled = true
-                downloadButton.text = "Download Qwen3 model"
+                downloadButton.text = "Download ${model.label}"
             }
         }
     }
