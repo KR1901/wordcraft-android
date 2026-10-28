@@ -5,7 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
-import android.view.inputmethod.InputMethodService
+import android.inputmethodservice.InputMethodService
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
