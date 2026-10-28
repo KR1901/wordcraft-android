@@ -169,7 +169,7 @@ class SimpleStudioActivity : Activity() {
 
     private fun downloadModel() {
         if (QwenModelStore.isModelDownloaded(this)) {
-            status.text = "${model.label} is already on this device."
+            status.text = "${QwenModelStore.active(this).label} is already on this device."
             return
         }
         downloadButton.isEnabled = false
@@ -183,12 +183,12 @@ class SimpleStudioActivity : Activity() {
                         "Downloading model… ${downloaded / 1_000_000} MB"
                     }
                 }
-                status.text = "${model.label} is ready. Everything now runs offline."
+                status.text = "${QwenModelStore.active(this).label} is ready. Everything now runs offline."
                 downloadButton.text = "Model downloaded"
             } catch (error: Throwable) {
                 status.text = error.message ?: "Download failed."
                 downloadButton.isEnabled = true
-                downloadButton.text = "Download ${model.label}"
+                downloadButton.text = "Download ${QwenModelStore.active(this).label}"
             }
         }
     }
