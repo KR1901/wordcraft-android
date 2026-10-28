@@ -8,9 +8,12 @@ import android.inputmethodservice.InputMethodService
 import android.provider.Settings
 import android.view.Gravity
 import android.view.View
+import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
+import com.wordcraft.android.MainActivity
 import java.util.Locale
 
 /**
@@ -19,7 +22,7 @@ import java.util.Locale
  */
 class WordCraftInputMethodService : InputMethodService() {
     private var shifted = false
-    private var symbols = false
+    private var page = PAGE_LETTERS
     private var darkTheme = false
     private var root: LinearLayout? = null
     private var suggestions: LinearLayout? = null
@@ -32,13 +35,13 @@ class WordCraftInputMethodService : InputMethodService() {
     )
     private val numbers = listOf(
         listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0"),
-        listOf("@", "#", "$", "%", "&", "-", "+", "(", ")"),
-        listOf("=\\", "/", ":", ";", "!", "?", "⌫"),
+        listOf("@", "#", "$", "%", "&", "-", "+", "(", ")", "=\\<"),
+        listOf("/", ":", ";", "!", "?", "⌫"),
         listOf("ABC", ",", "☻", "English", ".", "↵")
     )
     private val symbolRows = listOf(
         listOf("~", "`", "|", "•", "√", "π", "÷", "×", "¶", "∆"),
-        listOf("£", "¢", "€", "¥", "^", "°", "=", "{", "}"),
+        listOf("£", "¢", "€", "¥", "^", "°", "=", "{", "}", "?123"),
         listOf("<", ">", "[", "]", "⌫"),
         listOf("ABC", ",", "☻", "English", ".", "↵")
     )
@@ -46,7 +49,7 @@ class WordCraftInputMethodService : InputMethodService() {
         "teh" to "the", "adn" to "and", "dont" to "don't", "im" to "I'm",
         "wont" to "won't", "cant" to "can't", "recieve" to "receive",
         "thier" to "their", "becuase" to "because", "wierd" to "weird",
-        "youre" to "you're", "its" to "it's", "ur" to "your"
+        "youre" to "you're", "ur" to "your"
     )
 
     override fun onCreate() {
@@ -56,6 +59,13 @@ class WordCraftInputMethodService : InputMethodService() {
     }
 
     override fun onCreateInputView(): View = buildKeyboard()
+
+    override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
+        super.onStartInputView(info, restarting)
+        // A new field starts unshifted and must not inherit the previous field's suggestions.
+        shifted = false
+        refreshSuggestions()
+    }
 
     private fun buildKeyboard(): View {
         val bg = if (darkTheme) Color.rgb(28, 29, 34) else Color.rgb(238, 240, 246)
@@ -73,6 +83,8 @@ class WordCraftInputMethodService : InputMethodService() {
                 typeface = if (index == 0) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
                 gravity = Gravity.CENTER
                 setPadding(dp(4), dp(8), dp(4), dp(8))
+                isClickable = true
+                contentDescription = label
                 setOnClickListener {
                     when (index) {
                         3 -> {
@@ -94,11 +106,19 @@ class WordCraftInputMethodService : InputMethodService() {
         root!!.addView(suggestions, LinearLayout.LayoutParams(-1, dp(34)))
         refreshSuggestions()
 
-        val rows = if (!symbols) letters else if (shifted) symbolRows else numbers
+        val rows = when (page) {
+            PAGE_LETTERS -> letters
+            PAGE_NUMBERS -> numbers
+            else -> symbolRows
+        }
         rows.forEachIndexed { rowIndex, row ->
             val line = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
             row.forEach { key ->
-                val label = if (!symbols && shifted && key.length == 1 && key[0].isLetter()) key.uppercase(Locale.ROOT) else key
+                val label = if (page == PAGE_LETTERS && shifted && key.length == 1 && key[0].isLetter()) {
+                    key.uppercase(Locale.ROOT)
+                } else {
+                    key
+                }
                 val keyView = TextView(this).apply {
                     text = label
                     gravity = Gravity.CENTER
@@ -106,12 +126,14 @@ class WordCraftInputMethodService : InputMethodService() {
                     setTextSize(if (rowIndex == 3) 12f else 18f)
                     background = rounded(keyColor(key))
                     setPadding(dp(2), dp(8), dp(2), dp(8))
+                    isClickable = true
+                    contentDescription = keyLabel(key)
                     setOnClickListener { handleKey(key) }
                 }
                 val weight = when (key) {
                     "English" -> 2.0f
                     "☻" -> 1.0f
-                    "⇧", "⌫", "?123", "ABC", "↵" -> 1.35f
+                    "⇧", "⌫", "?123", "ABC", "↵", "=\\<" -> 1.35f
                     else -> 1f
                 }
                 line.addView(keyView, LinearLayout.LayoutParams(0, dp(if (rowIndex == 3) 42 else 45), weight).apply {
@@ -121,8 +143,8 @@ class WordCraftInputMethodService : InputMethodService() {
             root!!.addView(line)
         }
         val bottom = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
-        val space = keyButton("space", Color.WHITE) { currentInputConnection?.commitText(" ", 1); refreshSuggestions() }
-        val done = keyButton("Done", accent(), true) { requestHideSelf(0) }
+        val space = keyButton("space", keyColor("space")) { currentInputConnection?.commitText(" ", 1); refreshSuggestions() }
+        val done = keyButton("Done", accent(), inverse = true) { requestHideSelf(0) }
         bottom.addView(space, LinearLayout.LayoutParams(0, dp(40), 4f).apply { setMargins(dp(2), dp(3), dp(2), dp(3)) })
         bottom.addView(done, LinearLayout.LayoutParams(0, dp(40), 1.2f).apply { setMargins(dp(2), dp(3), dp(2), dp(3)) })
         root!!.addView(bottom)
@@ -135,48 +157,75 @@ class WordCraftInputMethodService : InputMethodService() {
             "⌫" -> {
                 val selected = connection.getSelectedText(0)
                 if (!selected.isNullOrEmpty()) connection.commitText("", 1)
-                else connection.deleteSurroundingText(1, 0)
+                else connection.deleteSurroundingTextInCodePoints(1, 0)
             }
             "↵" -> connection.commitText("\n", 1)
             "⇧" -> { shifted = !shifted; setInputView(buildKeyboard()) }
-            "?123" -> { symbols = true; shifted = false; setInputView(buildKeyboard()) }
-            "ABC" -> { symbols = false; shifted = false; setInputView(buildKeyboard()) }
+            "?123" -> { page = PAGE_NUMBERS; shifted = false; setInputView(buildKeyboard()) }
+            "=\\<" -> { page = PAGE_SYMBOLS; shifted = false; setInputView(buildKeyboard()) }
+            "ABC" -> { page = PAGE_LETTERS; shifted = false; setInputView(buildKeyboard()) }
             "English" -> switchToNextInputMethod(false)
             "☻" -> connection.commitText("😊", 1)
             else -> {
-                val output = if (shifted && !symbols) key.uppercase(Locale.ROOT) else key
+                val output = if (page == PAGE_LETTERS && shifted) key.uppercase(Locale.ROOT) else key
                 connection.commitText(output, 1)
-                if (shifted && !symbols) { shifted = false; setInputView(buildKeyboard()) }
+                if (page == PAGE_LETTERS && shifted) { shifted = false; setInputView(buildKeyboard()) }
                 refreshSuggestions()
             }
         }
     }
 
+    /** The word being typed right now, read fresh from the editor instead of a stale closure. */
+    private fun currentWord(): String {
+        val before = currentInputConnection?.getTextBeforeCursor(80, 0)?.toString().orEmpty()
+        return before.takeLastWhile { it.isLetter() || it == '\'' }
+    }
+
     private fun refreshSuggestions() {
         val strip = suggestions ?: return
         strip.removeAllViews()
-        val before = currentInputConnection?.getTextBeforeCursor(80, 0)?.toString().orEmpty()
-        val word = before.takeLastWhile { it.isLetter() || it == '\'' }
+        val word = currentWord()
+        if (word.isEmpty()) {
+            addSuggestion(strip, "WordCraft", null)
+            addSuggestion(strip, "Suggestions appear here", null)
+            return
+        }
         val correction = corrections[word.lowercase(Locale.ROOT)]
-        val options = listOfNotNull(correction, if (word.isNotEmpty()) word else null, if (word.isNotEmpty()) word.replaceFirstChar { it.titlecase(Locale.ROOT) } else null).distinct()
-        val shown = if (options.isEmpty()) listOf("WordCraft", "Suggestions appear here") else options.take(3)
-        shown.forEach { option ->
-            val item = TextView(this).apply {
-                text = option
-                gravity = Gravity.CENTER
-                setTextColor(foreground())
-                setTextSize(12f)
-                setPadding(dp(5), dp(4), dp(5), dp(4))
-                setOnClickListener {
-                    if (correction != null && option == correction && word.isNotEmpty()) {
-                        currentInputConnection?.deleteSurroundingText(word.length, 0)
-                        currentInputConnection?.commitText(option, 1)
-                    }
+        val capitalized = word.replaceFirstChar { it.titlecase(Locale.ROOT) }
+        val options = listOfNotNull(correction, capitalized.takeIf { it != word })
+            .distinct()
+            .take(3)
+        options.forEach { option -> addSuggestion(strip, option, option) }
+    }
+
+    /**
+     * @param replacement when non-null the chip rewrites the current word; when null it is
+     *   informational only, so tapping it does nothing surprising.
+     */
+    private fun addSuggestion(strip: LinearLayout, label: String, replacement: String?) {
+        val item = TextView(this).apply {
+            text = label
+            gravity = Gravity.CENTER
+            setTextColor(foreground())
+            setTextSize(12f)
+            setPadding(dp(5), dp(4), dp(5), dp(4))
+            isClickable = replacement != null
+            contentDescription = if (replacement != null) "Replace with $label" else label
+            setOnClickListener {
+                if (replacement != null) {
+                    replaceCurrentWord(replacement)
                     refreshSuggestions()
                 }
             }
-            strip.addView(item, LinearLayout.LayoutParams(0, dp(32), 1f))
         }
+        strip.addView(item, LinearLayout.LayoutParams(0, dp(32), 1f))
+    }
+
+    private fun replaceCurrentWord(replacement: String) {
+        val connection = currentInputConnection ?: return
+        val word = currentWord()
+        if (word.isNotEmpty()) connection.deleteSurroundingTextInCodePoints(word.length, 0)
+        connection.commitText(replacement, 1)
     }
 
     private fun runKeyboardAction(actionLabel: String) {
@@ -184,17 +233,17 @@ class WordCraftInputMethodService : InputMethodService() {
         val selected = connection.getSelectedText(0)?.toString().orEmpty()
         val text = if (selected.isNotBlank()) selected else connection.getTextBeforeCursor(300, 0)?.toString().orEmpty()
         if (text.isBlank()) {
-            // The app contains the full on-device AI writing studio; the IME action stays local.
-            connection.commitText("", 1)
+            // Nothing to hand over: say so instead of silently doing nothing.
+            Toast.makeText(this, "Type or select some text first", Toast.LENGTH_SHORT).show()
             return
         }
-        // Do not pretend an AI rewrite happened: selected text can be copied to the studio explicitly.
+        // Do not pretend an AI rewrite happened: the text is handed to the studio explicitly.
         val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
         clipboard.setPrimaryClip(android.content.ClipData.newPlainText("WordCraft draft", text))
         val launch = packageManager.getLaunchIntentForPackage(packageName)
         launch?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        launch?.putExtra("wordcraft_keyboard_action", actionLabel)
-        launch?.putExtra("wordcraft_keyboard_text", text)
+        launch?.putExtra(MainActivity.EXTRA_KEYBOARD_ACTION, actionLabel)
+        launch?.putExtra(MainActivity.EXTRA_KEYBOARD_TEXT, text)
         if (launch != null) startActivity(launch)
     }
 
@@ -203,16 +252,37 @@ class WordCraftInputMethodService : InputMethodService() {
             text = label
             gravity = Gravity.CENTER
             setTextColor(if (inverse) Color.WHITE else foreground())
+            setTextSize(14f)
+            setPadding(dp(2), dp(8), dp(2), dp(8))
             background = rounded(color)
+            isClickable = true
+            contentDescription = label
             setOnClickListener { click() }
         }
 
     private fun keyColor(key: String): Int = when (key) {
-        "⇧", "⌫", "?123", "ABC", "↵", "English" -> if (darkTheme) Color.rgb(63, 65, 76) else Color.rgb(211, 215, 228)
+        "⇧", "⌫", "?123", "ABC", "↵", "English", "=\\<" -> if (darkTheme) Color.rgb(63, 65, 76) else Color.rgb(211, 215, 228)
         else -> if (darkTheme) Color.rgb(47, 49, 57) else Color.WHITE
+    }
+    private fun keyLabel(key: String): String = when (key) {
+        "⌫" -> "Delete"
+        "⇧" -> "Shift"
+        "↵" -> "Enter"
+        "?123" -> "Numbers"
+        "=\\<" -> "Symbols"
+        "ABC" -> "Letters"
+        "☻" -> "Emoji"
+        "English" -> "Next keyboard"
+        else -> key
     }
     private fun foreground() = if (darkTheme) Color.rgb(245, 245, 250) else Color.rgb(32, 36, 48)
     private fun accent() = if (darkTheme) Color.rgb(166, 159, 255) else Color.rgb(85, 78, 170)
     private fun rounded(color: Int) = GradientDrawable().apply { setColor(color); cornerRadius = dp(8).toFloat() }
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    private companion object {
+        const val PAGE_LETTERS = 0
+        const val PAGE_NUMBERS = 1
+        const val PAGE_SYMBOLS = 2
+    }
 }
