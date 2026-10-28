@@ -14,7 +14,7 @@ import android.content.Context
 class OnDeviceQwenWritingAssistant(private val context: Context) : WritingAssistant {
     override suspend fun rewrite(input: String, action: WritingAction): WritingResult {
         check(QwenModelStore.isModelDownloaded(context)) {
-            "Download the Qwen model in AI settings before using writing actions."
+            "Download a model in WordCraft settings before using writing actions."
         }
         return try {
             LiteRtWritingAssistant(context).rewrite(input, action)
@@ -28,14 +28,12 @@ class OnDeviceQwenWritingAssistant(private val context: Context) : WritingAssist
             "The on-device model runtime could not be loaded on this device " +
                 "(${error.javaClass.simpleName}). The writing studio and keyboard still work."
         is OutOfMemoryError ->
-            "Not enough memory to run the model on this device. Close other apps and try again."
+            "Not enough memory for this model. Close other apps, or pick a smaller model in settings."
         else -> error.message ?: "On-device writing failed. Try again."
     }
 
     companion object {
-        const val MODEL_NAME = QwenModelStore.MODEL_NAME
-        const val MODEL_SIZE_LABEL = QwenModelStore.MODEL_SIZE_LABEL
-        const val MODEL_URL = QwenModelStore.MODEL_URL
+        fun activeModel(context: Context): LocalModel = QwenModelStore.active(context)
 
         fun modelFile(context: Context) = QwenModelStore.modelFile(context)
 
@@ -44,6 +42,6 @@ class OnDeviceQwenWritingAssistant(private val context: Context) : WritingAssist
         suspend fun downloadModel(
             context: Context,
             onProgress: (downloadedBytes: Long, totalBytes: Long) -> Unit = { _, _ -> }
-        ) = QwenModelStore.downloadModel(context, onProgress)
+        ) = QwenModelStore.downloadModel(context, QwenModelStore.active(context), onProgress)
     }
 }
