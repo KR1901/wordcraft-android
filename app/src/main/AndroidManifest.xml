@@ -28,6 +28,10 @@
             android:exported="true"
             android:windowSoftInputMode="adjustResize" />
 
+        <activity
+            android:name=".SmokeActivity"
+            android:exported="false" />
+
         <service
             android:name=".keyboard.WordCraftInputMethodService"
             android:label="WordCraft Keyboard"
