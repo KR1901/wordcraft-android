@@ -46,7 +46,9 @@ Written 2026-10-28. Status legend: **shipped**, *next*, planned.
 - Key-press sound (respects the system's touch-sounds setting) and haptic feedback, both toggleable.
 
 **Extras**
-- Toolbar: WordCraft mark, Grammar, Rewrite, paste-from-clipboard, settings.
+- Toolbar: WordCraft mark, ✨ Tone, Fix, paste-from-clipboard, settings.
+- **Inline AI**: a writing action runs inside the keyboard and its result appears in a panel above the keys with Replace/Dismiss — the studio app is never opened. Thirteen tones/actions, and the tone picker scrolls horizontally in the strip.
+- Key height setting (compact / normal / tall) and Gboard-style metrics: 1.5 dp key gaps, 12 dp corners, 4 dp side padding.
 - Keyboard settings screen: sound, vibration, number row, smart punctuation, auto-capitalise,
   autocorrect, suggestions, theme.
 
@@ -83,8 +85,8 @@ Written 2026-10-28. Status legend: **shipped**, *next*, planned.
 
 ## Phase 4 — AI surface (WordCraft's differentiator)
 
-- Inline rewrite chip on a selected sentence, not just the studio.
-- Grammar underline in the suggestion strip for the current sentence.
+- **Shipped in 0.1.24**: inline rewrite inside the keyboard — result panel with Replace/Dismiss, thirteen tones, no app switch.
+- Grammar underline in the suggestion strip for the current sentence (next).
 - Tone presets that persist per app (email vs chat).
 - Everything stays on-device through LiteRT-LM; no text leaves the phone without an explicit tap.
 
