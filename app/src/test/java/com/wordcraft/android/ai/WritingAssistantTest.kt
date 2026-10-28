@@ -19,6 +19,6 @@ class WritingAssistantTest {
     fun writingActionsHaveLabels() {
         assertEquals("Fix grammar", WritingAction.FIX_GRAMMAR.label)
         assertEquals("Paraphrase", WritingAction.PARAPHRASE.label)
-        assertEquals(7, WritingAction.entries.size)
+        assertEquals(13, WritingAction.entries.size)
     }
 }
