@@ -1,11 +1,12 @@
 package com.wordcraft.android.keyboard
 
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.inputmethodservice.InputMethodService
 import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
-import android.inputmethodservice.InputMethodService
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -19,7 +20,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -32,14 +35,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import android.content.ClipData
 import com.wordcraft.android.KeyboardSettingsActivity
 import com.wordcraft.android.MainActivity
 import kotlinx.coroutines.CoroutineScope
@@ -53,9 +59,19 @@ import kotlinx.coroutines.launch
 
 enum class Page { LETTERS, NUMBERS, SYMBOLS, EMOJI }
 enum class Shift { OFF, ON, LOCKED }
+enum class StripAction { INSERT, SUGGEST, UNDO }
+
+/** One chip in the strip above the keys. */
+data class StripItem(val label: String, val value: String, val action: StripAction)
+
+/** The magnified bubble shown above a key while it is held. */
+data class KeyPreview(val label: String, val center: Offset)
+
 private enum class KeyStyle { Normal, Function, Accent }
+private data class UndoState(val original: String, val inserted: String)
 
 private const val CURSOR_STEP_PX = 26f
+private const val DELETE_STEP_PX = 46f
 private const val REPEAT_GRACE_MS = 260L
 private const val WORD_REPEAT_MS = 45L
 private const val BULK_REPEAT_MS = 26L
@@ -64,8 +80,8 @@ private const val BULK_AFTER_TICKS = 10
 
 /**
  * All keyboard behaviour lives here so the composables stay declarative: text entry, deletion
- * (tap / hold / word / clear), shift and caps, suggestions, learning, cursor dragging, sound and
- * haptics. The view is rebuilt by Compose; this object survives between input views.
+ * (tap / hold / word / swipe), shift and caps, suggestions, undo, clipboard history, learning,
+ * cursor dragging, key previews, sound and haptics.
  */
 class KeyboardController(
     private val service: InputMethodService,
@@ -74,15 +90,18 @@ class KeyboardController(
 ) {
     var page by mutableStateOf(Page.LETTERS)
     var shift by mutableStateOf(Shift.OFF)
-    var suggestions by mutableStateOf<List<String>>(emptyList())
-    var alternatives by mutableStateOf<List<String>>(emptyList())
-    var lastKeyWasSpace by mutableStateOf(false)
+    var suggestions by mutableStateOf<List<StripItem>>(emptyList())
+    var alternatives by mutableStateOf<List<StripItem>>(emptyList())
+    var preview by mutableStateOf<KeyPreview?>(null)
 
+    private var undoState by mutableStateOf<UndoState?>(null)
+    private var rootOrigin = Offset.Zero
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var repeatJob: Job? = null
     private var lastShiftTapAt = 0L
     private var lastSpaceAt = 0L
     private var dragAccumulator = 0f
+    private var deleteAccumulator = 0f
     private var hapticTarget: android.view.View? = null
 
     private val ic get() = service.currentInputConnection
@@ -96,6 +115,7 @@ class KeyboardController(
     fun onStartInput() {
         page = Page.LETTERS
         alternatives = emptyList()
+        preview = null
         shift = if (prefs.autoCapitalize && atSentenceStart()) Shift.ON else Shift.OFF
         refresh()
     }
@@ -104,6 +124,7 @@ class KeyboardController(
         stopRepeat()
         alternatives = emptyList()
         suggestions = emptyList()
+        preview = null
     }
 
     fun destroy() {
@@ -125,6 +146,25 @@ class KeyboardController(
         }
     }
 
+    // ---------------------------------------------------------------- key preview
+
+    fun setRootOrigin(origin: Offset) {
+        rootOrigin = origin
+    }
+
+    fun showPreview(label: String, center: Offset) {
+        preview = KeyPreview(label, center)
+    }
+
+    fun hidePreview() {
+        preview = null
+    }
+
+    /** Preview centre in keyboard-root coordinates, ready for the bubble's offset. */
+    val previewPosition: Offset
+        get() = preview?.let { Offset(it.center.x - rootOrigin.x, it.center.y - rootOrigin.y) }
+            ?: Offset.Zero
+
     // ---------------------------------------------------------------- typing
 
     fun typeLetter(ch: Char) {
@@ -141,6 +181,12 @@ class KeyboardController(
         refresh()
     }
 
+    fun typeEmoji(emoji: String) {
+        ic?.commitText(emoji, 1)
+        engine.rememberEmoji(emoji)
+        refresh()
+    }
+
     fun space() {
         val connection = ic ?: return
         val now = System.currentTimeMillis()
@@ -154,16 +200,14 @@ class KeyboardController(
         }
         val word = currentWord()
         val corrected = if (prefs.autoCorrect) engine.correctionFor(word) else null
-        when {
-            corrected != null -> {
-                connection.deleteSurroundingText(word.length, 0)
-                connection.commitText("$corrected ", 1)
-                engine.learnWord(corrected, previousWord())
-            }
-            else -> {
-                connection.commitText(" ", 1)
-                engine.learnWord(word, previousWord())
-            }
+        if (corrected != null) {
+            connection.deleteSurroundingText(word.length, 0)
+            connection.commitText("$corrected ", 1)
+            engine.learnWord(corrected, previousWord())
+            undoState = UndoState(original = word, inserted = "$corrected ")
+        } else {
+            connection.commitText(" ", 1)
+            engine.learnWord(word, previousWord())
         }
         lastSpaceAt = now
         alternatives = emptyList()
@@ -198,7 +242,35 @@ class KeyboardController(
         val clipboard = service.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val text = clipboard.primaryClip?.takeIf { it.itemCount > 0 }
             ?.getItemAt(0)?.coerceToText(service)?.toString()
-        if (!text.isNullOrEmpty()) ic?.commitText(text, 1)
+        if (!text.isNullOrEmpty()) {
+            ic?.commitText(text, 1)
+            engine.rememberClipboard(text)
+        }
+        refresh()
+    }
+
+    /** Long-press on Paste: offer recent clipboard entries in the strip. */
+    fun showClipboardHistory() {
+        val clipboard = service.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val current = clipboard.primaryClip?.takeIf { it.itemCount > 0 }
+            ?.getItemAt(0)?.coerceToText(service)?.toString()?.trim()
+        if (!current.isNullOrEmpty()) engine.rememberClipboard(current)
+        val history = engine.clipboardHistory()
+        if (history.isEmpty()) {
+            alternatives = listOf(StripItem("Clipboard is empty", "", StripAction.UNDO))
+            return
+        }
+        alternatives = history.take(3).map { entry ->
+            StripItem(previewOf(entry), entry, StripAction.INSERT)
+        }
+    }
+
+    fun undoLast() {
+        val undo = undoState ?: return
+        val connection = ic ?: return
+        connection.deleteSurroundingText(undo.inserted.length, 0)
+        connection.commitText(undo.original, 1)
+        undoState = null
         refresh()
     }
 
@@ -224,6 +296,20 @@ class KeyboardController(
         while (cut > 0 && before[cut - 1].isLetterOrDigit()) cut--
         val count = before.length - cut
         if (count > 0) connection.deleteSurroundingTextInCodePoints(count, 0)
+    }
+
+    /** Swipe left across the backspace key: delete words at the speed of the gesture. */
+    fun dragDelete(dx: Float) {
+        deleteAccumulator += dx
+        while (deleteAccumulator < -DELETE_STEP_PX) {
+            deleteWord()
+            deleteAccumulator += DELETE_STEP_PX
+        }
+    }
+
+    fun endDragDelete() {
+        deleteAccumulator = 0f
+        refresh()
     }
 
     fun clearAll() {
@@ -310,9 +396,37 @@ class KeyboardController(
         connection.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
     }
 
+    // ---------------------------------------------------------------- strip
+
     fun showAlternatives(options: List<String>) {
-        alternatives = options
+        alternatives = options.map { StripItem(it, it, StripAction.INSERT) }
     }
+
+    fun stripItems(): List<StripItem> {
+        val base = if (alternatives.isNotEmpty()) alternatives else suggestions
+        val undo = if (undoState != null) listOf(StripItem("↶ Undo", "", StripAction.UNDO)) else emptyList()
+        return (undo + base).take(3)
+    }
+
+    fun onStripItem(item: StripItem) {
+        when (item.action) {
+            StripAction.UNDO -> {
+                if (item.label == "↶ Undo") {
+                    undoLast()
+                } else {
+                    alternatives = emptyList()
+                }
+            }
+            StripAction.INSERT -> {
+                if (item.value.isNotEmpty()) ic?.commitText(item.value, 1)
+                alternatives = emptyList()
+                refresh()
+            }
+            StripAction.SUGGEST -> applySuggestion(item.value)
+        }
+    }
+
+    // ---------------------------------------------------------------- intents
 
     fun openSettings() {
         runCatching {
@@ -356,22 +470,14 @@ class KeyboardController(
         }
     }
 
-    fun typeEmoji(emoji: String) {
-        ic?.commitText(emoji, 1)
-        engine.rememberEmoji(emoji)
-        refresh()
-    }
-
     fun recentEmojis(): List<String> = engine.recentEmojis()
 
     // ---------------------------------------------------------------- state
 
     fun refresh() {
         val word = currentWord()
-        suggestions = if (prefs.suggestionsEnabled && word.isNotEmpty()) {
-            engine.suggest(word, previousWord())
-        } else if (prefs.suggestionsEnabled && word.isEmpty()) {
-            engine.suggest("", previousWord()).take(3)
+        suggestions = if (prefs.suggestionsEnabled) {
+            engine.suggest(word, previousWord()).map { StripItem(it, it, StripAction.SUGGEST) }
         } else {
             emptyList()
         }
@@ -379,6 +485,9 @@ class KeyboardController(
             shift = Shift.ON
         }
     }
+
+    private fun previewOf(text: String): String =
+        if (text.length <= 16) text else text.take(15) + "…"
 
     private fun textBefore(limit: Int = 96): String =
         ic?.getTextBeforeCursor(limit, 0)?.toString().orEmpty()
@@ -410,12 +519,38 @@ class KeyboardController(
 fun WordCraftKeyboard(controller: KeyboardController) {
     WordCraftKeyboardTheme(controller.prefs.darkTheme) {
         Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 3.dp, vertical = 5.dp)) {
-                ToolbarRow(controller)
-                StripRow(controller)
-                when (controller.page) {
-                    Page.EMOJI -> EmojiPad(controller)
-                    else -> KeyPad(controller)
+            Box(Modifier.onGloballyPositioned { controller.setRootOrigin(it.positionInRoot()) }) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 3.dp, vertical = 5.dp)) {
+                    ToolbarRow(controller)
+                    StripRow(controller)
+                    when (controller.page) {
+                        Page.EMOJI -> EmojiPad(controller)
+                        else -> KeyPad(controller)
+                    }
+                }
+                controller.preview?.let { key ->
+                    val position = controller.previewPosition
+                    Box(
+                        modifier = Modifier
+                            .offset {
+                                IntOffset(
+                                    (position.x - 26.dp.toPx()).toInt(),
+                                    (position.y - 76.dp.toPx()).toInt()
+                                )
+                            }
+                            .width(52.dp)
+                            .height(60.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(MaterialTheme.colorScheme.primary),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            key.label,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                 }
             }
         }
@@ -432,7 +567,9 @@ private fun ToolbarRow(controller: KeyboardController) {
         ToolChip("WordCraft", controller, accent = true, weight = 1.4f) { controller.openStudio() }
         ToolChip("Grammar", controller, weight = 1f) { controller.runWritingAction("Fix grammar") }
         ToolChip("Rewrite", controller, weight = 1f) { controller.runWritingAction("Paraphrase") }
-        ToolChip("Paste", controller, weight = 0.9f) { controller.paste() }
+        ToolChip("Paste", controller, weight = 0.9f, onLong = { controller.showClipboardHistory() }) {
+            controller.paste()
+        }
         ToolChip("Aa", controller, weight = 0.7f) { controller.openSettings() }
     }
 }
@@ -443,6 +580,7 @@ private fun RowScope.ToolChip(
     controller: KeyboardController,
     weight: Float,
     accent: Boolean = false,
+    onLong: (() -> Unit)? = null,
     onTap: () -> Unit
 ) {
     val background = if (accent) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer
@@ -454,10 +592,13 @@ private fun RowScope.ToolChip(
             .clip(RoundedCornerShape(15.dp))
             .background(background)
             .pointerInput(label) {
-                detectTapGestures(onPress = {
-                    controller.keyDown()
-                    if (tryAwaitRelease()) onTap()
-                })
+                detectTapGestures(
+                    onPress = {
+                        controller.keyDown()
+                        if (tryAwaitRelease()) onTap()
+                    },
+                    onLongPress = { onLong?.invoke() }
+                )
             },
         contentAlignment = Alignment.Center
     ) {
@@ -467,7 +608,7 @@ private fun RowScope.ToolChip(
 
 @Composable
 private fun StripRow(controller: KeyboardController) {
-    val items = controller.alternatives.ifEmpty { controller.suggestions }
+    val items = controller.stripItems()
     Row(Modifier.fillMaxWidth().height(38.dp), verticalAlignment = Alignment.CenterVertically) {
         if (items.isEmpty()) {
             Text(
@@ -478,7 +619,7 @@ private fun StripRow(controller: KeyboardController) {
                 fontSize = 12.sp
             )
         } else {
-            items.take(3).forEach { item ->
+            items.forEach { item ->
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -489,19 +630,13 @@ private fun StripRow(controller: KeyboardController) {
                         .pointerInput(item) {
                             detectTapGestures(onPress = {
                                 controller.keyDown()
-                                if (tryAwaitRelease()) {
-                                    if (controller.alternatives.isNotEmpty()) {
-                                        controller.typeSymbol(item)
-                                    } else {
-                                        controller.applySuggestion(item)
-                                    }
-                                }
+                                if (tryAwaitRelease()) controller.onStripItem(item)
                             })
                         },
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        item,
+                        item.label,
                         color = MaterialTheme.colorScheme.onSurface,
                         fontSize = 14.sp,
                         maxLines = 1,
@@ -522,6 +657,7 @@ private data class KeySpec(
     val onTap: () -> Unit,
     val onLong: (() -> Unit)? = null,
     val holdDelete: Boolean = false,
+    val swipeDelete: Boolean = false,
     val isSpace: Boolean = false
 )
 
@@ -546,7 +682,8 @@ private fun KeyPad(controller: KeyboardController) {
                             fontSize = spec.fontSize,
                             onTap = spec.onTap,
                             onLong = spec.onLong,
-                            holdDelete = spec.holdDelete
+                            holdDelete = spec.holdDelete,
+                            swipeDelete = spec.swipeDelete
                         )
                     }
                 }
@@ -562,12 +699,17 @@ private fun buildRows(controller: KeyboardController): List<List<KeySpec>> {
         onTap = { controller.typeLetter(ch) },
         onLong = accentOptions(ch)?.let { options -> { controller.showAlternatives(options) } }
     )
-    val shiftLabel = when (controller.shift) {
-        Shift.LOCKED -> "⇪"
-        Shift.ON -> "⇧"
-        Shift.OFF -> "⇧"
-    }
+    val shiftLabel = if (controller.shift == Shift.LOCKED) "⇪" else "⇧"
     val shiftStyle = if (controller.shift == Shift.OFF) KeyStyle.Function else KeyStyle.Accent
+    val backspace = KeySpec(
+        "⌫",
+        weight = 1.3f,
+        style = KeyStyle.Function,
+        onTap = { controller.deleteChar() },
+        onLong = { controller.startHoldDelete() },
+        holdDelete = true,
+        swipeDelete = true
+    )
 
     return when (controller.page) {
         Page.NUMBERS -> listOf(
@@ -584,8 +726,7 @@ private fun buildRows(controller: KeyboardController): List<List<KeySpec>> {
                 KeySpec(";", onTap = { controller.typeSymbol(";") }),
                 KeySpec("!", onTap = { controller.typeSymbol("!") }),
                 KeySpec("?", onTap = { controller.typeSymbol("?") }),
-                KeySpec("⌫", weight = 1.3f, style = KeyStyle.Function, onTap = { controller.deleteChar() },
-                    onLong = { controller.startHoldDelete() }, holdDelete = true)
+                backspace
             ),
             bottomRow(controller, "ABC", { controller.showPage(Page.LETTERS) })
         )
@@ -604,8 +745,7 @@ private fun buildRows(controller: KeyboardController): List<List<KeySpec>> {
                 KeySpec("[", onTap = { controller.typeSymbol("[") }),
                 KeySpec("]", onTap = { controller.typeSymbol("]") }),
                 KeySpec("_", onTap = { controller.typeSymbol("_") }),
-                KeySpec("⌫", weight = 1.3f, style = KeyStyle.Function, onTap = { controller.deleteChar() },
-                    onLong = { controller.startHoldDelete() }, holdDelete = true)
+                backspace
             ),
             bottomRow(controller, "ABC", { controller.showPage(Page.LETTERS) })
         )
@@ -619,10 +759,7 @@ private fun buildRows(controller: KeyboardController): List<List<KeySpec>> {
                 listOf(
                     KeySpec(shiftLabel, weight = 1.3f, style = shiftStyle, onTap = { controller.toggleShift() },
                         onLong = { controller.lockShift() })
-                ) + "zxcvbnm".map { letter(it) } + listOf(
-                    KeySpec("⌫", weight = 1.3f, style = KeyStyle.Function, onTap = { controller.deleteChar() },
-                        onLong = { controller.startHoldDelete() }, holdDelete = true)
-                )
+                ) + "zxcvbnm".map { letter(it) } + listOf(backspace)
             )
             add(bottomRow(controller, "?123", { controller.showPage(Page.NUMBERS) }))
         }
@@ -654,10 +791,12 @@ private fun Key(
     fontSize: TextUnit,
     onTap: () -> Unit,
     onLong: (() -> Unit)?,
-    holdDelete: Boolean
+    holdDelete: Boolean,
+    swipeDelete: Boolean = false
 ) {
     var pressed by remember { mutableStateOf(false) }
     var longFired by remember { mutableStateOf(false) }
+    var centerInRoot by remember { mutableStateOf(Offset.Zero) }
     val scale by animateFloatAsState(
         targetValue = if (pressed) 0.90f else 1f,
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessHigh),
@@ -678,15 +817,18 @@ private fun Key(
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .clip(RoundedCornerShape(14.dp))
             .background(if (pressed) base.copy(alpha = 0.72f) else base)
+            .onGloballyPositioned { centerInRoot = it.boundsInRoot().center }
             .pointerInput(label, style) {
                 detectTapGestures(
                     onPress = {
                         longFired = false
                         pressed = true
                         controller.keyDown()
+                        if (style == KeyStyle.Normal) controller.showPreview(label, centerInRoot)
                         if (!holdDelete) onTap()
                         val released = tryAwaitRelease()
                         pressed = false
+                        controller.hidePreview()
                         if (holdDelete) {
                             controller.stopRepeat()
                             // Released before the hold fired: treat it as a single delete.
@@ -698,7 +840,23 @@ private fun Key(
                         onLong?.invoke()
                     }
                 )
-            },
+            }
+            .then(
+                if (swipeDelete) {
+                    Modifier.pointerInput(Unit) {
+                        detectHorizontalDragGestures(
+                            onDragEnd = { controller.endDragDelete() },
+                            onDragCancel = { controller.endDragDelete() },
+                            onHorizontalDrag = { change, dragAmount ->
+                                change.consume()
+                                controller.dragDelete(dragAmount)
+                            }
+                        )
+                    }
+                } else {
+                    Modifier
+                }
+            ),
         contentAlignment = Alignment.Center
     ) {
         Text(label, color = foreground, fontSize = fontSize, fontWeight = FontWeight.Medium, maxLines = 1)
@@ -747,8 +905,7 @@ private fun SpaceKey(controller: KeyboardController, modifier: Modifier) {
 
 @Composable
 private fun EmojiPad(controller: KeyboardController) {
-    val recents = controller.recentEmojis()
-    val emojis = (recents + EMOJIS).distinct()
+    val emojis = (controller.recentEmojis() + EMOJIS).distinct()
     Column(Modifier.fillMaxWidth()) {
         emojis.chunked(8).take(5).forEach { row ->
             Row(Modifier.fillMaxWidth()) {
