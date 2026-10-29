@@ -214,8 +214,8 @@ private fun SettingsScreen(onOpenKeyboard: () -> Unit) {
                 )
                 Text(
                     "Writing assistant and keyboard. Models run locally through LiteRT-LM; your text " +
-                        "is never uploaded. Models are Apache-2.0 or Gemma-licensed builds from the " +
-                        "LiteRT community on Hugging Face.",
+                        "is never uploaded. All models listed here are Apache-2.0 builds from the LiteRT "
+                        + "community on Hugging Face, and every download link is checked to be public.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
