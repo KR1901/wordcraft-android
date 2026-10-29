@@ -621,7 +621,7 @@ fun WordCraftKeyboard(controller: KeyboardController) {
 @Composable
 private fun ToolbarRow(controller: KeyboardController) {
     Row(
-        Modifier.fillMaxWidth().height(32.dp),
+        Modifier.fillMaxWidth().height(44.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -649,7 +649,7 @@ private fun RowScope.ToolChip(
     Box(
         modifier = Modifier
             .weight(weight)
-            .height(30.dp)
+            .height(40.dp)
             .clip(RoundedCornerShape(15.dp))
             .background(background)
             .pointerInput(label) {
@@ -671,17 +671,17 @@ private fun RowScope.ToolChip(
 private fun StripRow(controller: KeyboardController) {
     val items = controller.stripItems()
     if (items.isEmpty()) {
-        Row(Modifier.fillMaxWidth().height(36.dp)) { }
+        Row(Modifier.fillMaxWidth().height(44.dp)) { }
         return
     }
     if (items.size <= 3) {
-        Row(Modifier.fillMaxWidth().height(36.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
             items.forEach { item -> StripChip(item, controller, Modifier.weight(1f)) }
         }
     } else {
         // The tone picker has thirteen entries: scroll horizontally instead of squeezing them.
         Row(
-            Modifier.fillMaxWidth().height(36.dp).horizontalScroll(rememberScrollState()),
+            Modifier.fillMaxWidth().height(44.dp).horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -694,7 +694,7 @@ private fun StripRow(controller: KeyboardController) {
 private fun StripChip(item: StripItem, controller: KeyboardController, modifier: Modifier) {
     Box(
         modifier = modifier
-            .height(32.dp)
+            .height(40.dp)
             .padding(horizontal = 2.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(MaterialTheme.colorScheme.surfaceContainer)
@@ -769,8 +769,8 @@ private fun ActionPill(
     val foreground = if (accent) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
     Box(
         modifier = Modifier
-            .height(28.dp)
-            .clip(RoundedCornerShape(14.dp))
+            .height(36.dp)
+            .clip(RoundedCornerShape(18.dp))
             .background(background)
             .pointerInput(label) {
                 detectTapGestures(onPress = {
@@ -800,9 +800,10 @@ private data class KeySpec(
 
 /** Key heights tuned to Gboard's proportions; the user can pick the row height in settings. */
 private fun KeyboardController.keyHeightDp(): Dp = when (prefs.keyHeight) {
-    0 -> 40.dp
-    2 -> 52.dp
-    else -> 46.dp
+    0 -> 44.dp
+    2 -> 56.dp
+    // 48 dp is Android's minimum recommended touch target; the default meets it.
+    else -> 48.dp
 }
 
 @Composable
