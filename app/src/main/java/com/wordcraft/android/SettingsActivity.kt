@@ -30,6 +30,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -72,6 +73,13 @@ private fun SettingsScreen(onOpenKeyboard: () -> Unit) {
     var downloading by remember { mutableStateOf<LocalModel?>(null) }
     var progress by remember { mutableStateOf("") }
     var message by remember { mutableStateOf<String?>(null) }
+
+    // Retired models (Qwen3, Qwen2.5) leave their files behind; clear them on entry.
+    LaunchedEffect(Unit) {
+        QwenModelStore.pruneUnknownModels(context)
+        active = QwenModelStore.active(context)
+        downloaded = QwenModelStore.downloadedModels(context)
+    }
 
     Column(
         modifier = Modifier
@@ -147,7 +155,7 @@ private fun SettingsScreen(onOpenKeyboard: () -> Unit) {
                                 QwenModelStore.delete(context, model)
                                 downloaded = QwenModelStore.downloadedModels(context)
                                 if (active == model) {
-                                    val next = downloaded.firstOrNull() ?: LocalModel.QWEN3_06B
+                                    val next = downloaded.firstOrNull() ?: LocalModel.QWEN35_08B
                                     QwenModelStore.setActive(context, next)
                                     active = next
                                 }
