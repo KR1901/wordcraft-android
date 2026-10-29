@@ -39,11 +39,20 @@ enum class LocalModel(
     QWEN25_15B(
         id = "qwen2.5-1.5b",
         label = "Qwen2.5 1.5B",
-        tagline = "Strongest instruction following here. Large download, needs ~2 GB free RAM.",
+        tagline = "Strong instruction following. Large download, needs ~2 GB free RAM.",
         fileName = "Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.litertlm",
         repo = "litert-community/Qwen2.5-1.5B-Instruct",
         sizeLabel = "1.6 GB",
         approxBytes = 1_598_000_000L
+    ),
+    QWEN35_2B(
+        id = "qwen3.5-2b",
+        label = "Qwen3.5 2B",
+        tagline = "Newest architecture, text-only. ~2 GB download, needs ~2.5 GB free RAM.",
+        fileName = "Qwen3.5-2B_int8.litertlm",
+        repo = "litert-community/Qwen3.5-2B",
+        sizeLabel = "2.0 GB",
+        approxBytes = 2_119_744_416L
     );
 
     val url: String get() = "https://huggingface.co/$repo/resolve/main/$fileName"
