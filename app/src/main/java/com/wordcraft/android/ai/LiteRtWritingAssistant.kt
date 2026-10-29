@@ -7,6 +7,7 @@ import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.SamplerConfig
+import com.google.ai.edge.litertlm.ThinkingConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.withContext
@@ -202,7 +203,11 @@ internal class LiteRtWritingAssistant(private val context: Context) {
     ): String {
         val config = ConversationConfig(
             systemInstruction = Contents.of(system),
-            samplerConfig = SamplerConfig(topK = 40, topP = 0.95, temperature = temperature, seed = 0)
+            samplerConfig = SamplerConfig(topK = 40, topP = 0.95, temperature = temperature, seed = 0),
+            // Qwen3 and Qwen3.5 default to thinking-on, and the reasoning text lands in the
+            // answer. That is what made earlier builds paste "Thinking process…" into the
+            // rewrite. Off, explicitly, for every model.
+            thinkingConfig = ThinkingConfig(enableThinking = false)
         )
         engine.createConversation(config).use { conversation ->
             val response = conversation.sendMessageAsync(user).toList()
