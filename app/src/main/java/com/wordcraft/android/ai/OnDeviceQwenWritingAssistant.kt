@@ -8,18 +8,36 @@ import android.content.Context
  * This class deliberately has **no** LiteRT imports and does no work at construction time, so
  * the app can reference it from the UI (and from status checks) without ever loading native
  * code. The real runtime lives in [LiteRtWritingAssistant], which is only touched inside
- * [rewrite]. Every failure — including a missing or unloadable native library, which arrives as
- * an [Error] rather than an [Exception] — is converted into a readable message.
+ * [rewrite] / [ask]. Every failure — including a missing or unloadable native library, which
+ * arrives as an [Error] rather than an [Exception] — is converted into a readable message.
  */
 class OnDeviceQwenWritingAssistant(private val context: Context) : WritingAssistant {
-    override suspend fun rewrite(input: String, action: WritingAction): WritingResult {
-        check(QwenModelStore.isModelDownloaded(context)) {
-            "Download a model in WordCraft settings before using writing actions."
-        }
+
+    override suspend fun rewrite(
+        input: String,
+        action: WritingAction,
+        length: LengthTarget
+    ): WritingResult {
+        requireModel()
         return try {
-            LiteRtWritingAssistant(context).rewrite(input, action)
+            LiteRtWritingAssistant(context).rewrite(input, action, length)
         } catch (error: Throwable) {
             throw IllegalStateException(describe(error), error)
+        }
+    }
+
+    override suspend fun ask(prompt: String): WritingResult {
+        requireModel()
+        return try {
+            LiteRtWritingAssistant(context).ask(prompt)
+        } catch (error: Throwable) {
+            throw IllegalStateException(describe(error), error)
+        }
+    }
+
+    private fun requireModel() {
+        check(QwenModelStore.isModelDownloaded(context)) {
+            "Download a model in WordCraft settings before using writing actions."
         }
     }
 
