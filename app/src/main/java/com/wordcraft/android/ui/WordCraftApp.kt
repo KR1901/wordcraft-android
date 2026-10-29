@@ -5,7 +5,6 @@ import android.content.Intent
 import android.provider.Settings
 import android.view.inputmethod.InputMethodManager
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,26 +14,28 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.BugReport
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExtendedFloatingActionButton
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -61,21 +62,28 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.wordcraft.android.CrashReport
 import com.wordcraft.android.SettingsActivity
+import com.wordcraft.android.ai.LengthTarget
+import com.wordcraft.android.ai.LocalModel
 import com.wordcraft.android.ai.OnDeviceQwenWritingAssistant
 import com.wordcraft.android.ai.QwenModelStore
 import com.wordcraft.android.ai.WritingAction
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private const val DRAFT_PREFS = "wordcraft_documents"
-private const val DRAFT_KEY = "draft_default"
-private const val DRAFT_SAVE_DELAY_MS = 400L
+private enum class ChatRole { USER, ASSISTANT }
+
+private data class ChatMessage(
+    val role: ChatRole,
+    val text: String,
+    val meta: String? = null,
+    val failed: Boolean = false
+)
 
 /**
- * @param resumeTick changes every time the activity resumes, so system settings and the selected
- *   model are re-read instead of being frozen at first composition.
- * @param initialText draft handed over from the keyboard's toolbar.
- * @param initialAction action requested by the keyboard, if any.
+ * Chat-shaped writing studio.
+ *
+ * Two modes share one composer: pick a tone and the message is rewritten with it, or pick
+ * "Chat" and it is sent to the model as a free prompt. Model, tone and length are all pickers in
+ * the composer, so nothing hides behind a settings screen mid-task.
  */
 @Composable
 fun WordCraftApp(
@@ -85,82 +93,140 @@ fun WordCraftApp(
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
-    val draftStore = remember(context) { context.getSharedPreferences(DRAFT_PREFS, Context.MODE_PRIVATE) }
-    var draft by remember {
-        mutableStateOf(
-            initialText?.takeIf { it.isNotBlank() }
-                ?: draftStore.getString(DRAFT_KEY, "Your words, only clearer.") ?: ""
-        )
-    }
-    var chosenAction by remember { mutableStateOf(initialAction ?: WritingAction.FIX_GRAMMAR) }
-    var result by remember { mutableStateOf<String?>(null) }
-    var notice by remember { mutableStateOf("Ready when you are.") }
-    var isWorking by remember { mutableStateOf(false) }
-    var modelReady by remember { mutableStateOf(QwenModelStore.isModelDownloaded(context)) }
-    var modelLabel by remember { mutableStateOf(QwenModelStore.active(context).label) }
-    var keyboardEnabled by remember { mutableStateOf(false) }
-    val inputMethodManager = remember(context) {
-        context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-    }
     val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
+
+    var messages by remember { mutableStateOf(listOf<ChatMessage>()) }
+    var input by remember { mutableStateOf(initialText.orEmpty()) }
+    var tone by remember { mutableStateOf<WritingAction?>(initialAction ?: WritingAction.FIX_GRAMMAR) }
+    var length by remember { mutableStateOf(LengthTarget.SAME) }
+    var model by remember { mutableStateOf(QwenModelStore.active(context)) }
+    var modelReady by remember { mutableStateOf(QwenModelStore.isModelDownloaded(context)) }
+    var busy by remember { mutableStateOf(false) }
+    var modelMenu by remember { mutableStateOf(false) }
+    var toneMenu by remember { mutableStateOf(false) }
+    var lengthMenu by remember { mutableStateOf(false) }
+    var keyboardEnabled by remember { mutableStateOf(false) }
     var crashReport by remember(context) { mutableStateOf(CrashReport.latest(context)) }
 
     LaunchedEffect(resumeTick) {
         keyboardEnabled = isOurKeyboardEnabled(context)
+        model = QwenModelStore.active(context)
         modelReady = QwenModelStore.isModelDownloaded(context)
-        modelLabel = QwenModelStore.active(context).label
     }
-    LaunchedEffect(initialText, initialAction) {
-        if (!initialText.isNullOrBlank()) {
-            draft = initialText
-            initialAction?.let { chosenAction = it }
-        }
-    }
-    // Debounced persistence: avoids a disk write per keystroke and stores the draft as typed.
-    LaunchedEffect(draft) {
-        delay(DRAFT_SAVE_DELAY_MS)
-        draftStore.edit().putString(DRAFT_KEY, draft).apply()
+    LaunchedEffect(messages.size, busy) {
+        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
     }
 
-    Scaffold(
-        contentWindowInsets = WindowInsets.safeDrawing,
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = {
-                    if (keyboardEnabled) inputMethodManager.showInputMethodPicker()
-                    else context.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
-                },
-                icon = { Icon(Icons.Rounded.Keyboard, contentDescription = null) },
-                text = { Text(if (keyboardEnabled) "Switch to WordCraft" else "Enable WordCraft keyboard") }
-            )
+    fun send() {
+        val text = input.trim()
+        if (text.isEmpty() || busy) return
+        val action = tone
+        messages = messages + ChatMessage(ChatRole.USER, text)
+        input = ""
+        busy = true
+        scope.launch {
+            val assistant = OnDeviceQwenWritingAssistant(context)
+            val meta = if (action == null) {
+                "Chat · ${model.label}"
+            } else {
+                "${action.label} · ${if (action.allowsLengthTarget) length.label else "same length"} · ${model.label}"
+            }
+            try {
+                val result = if (action == null) assistant.ask(text) else assistant.rewrite(text, action, length)
+                messages = messages + ChatMessage(ChatRole.ASSISTANT, result.text, meta)
+            } catch (error: Throwable) {
+                messages = messages + ChatMessage(
+                    ChatRole.ASSISTANT,
+                    error.message ?: "On-device writing failed.",
+                    meta,
+                    failed = true
+                )
+            } finally {
+                busy = false
+            }
         }
-    ) { insets ->
+    }
+
+    Scaffold(contentWindowInsets = WindowInsets.safeDrawing) { insets ->
         Column(
-            modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)
-                .verticalScroll(rememberScrollState()).padding(insets)
-                .padding(horizontal = 20.dp).padding(top = 18.dp, bottom = 112.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp)
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.surface)
+                .padding(insets)
+                .imePadding()
         ) {
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            // ------------------------------------------------------------ top bar
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Box(
-                    modifier = Modifier.size(48.dp).clip(RoundedCornerShape(16.dp))
+                    modifier = Modifier.size(38.dp).clip(RoundedCornerShape(12.dp))
                         .background(MaterialTheme.colorScheme.primaryContainer),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         Icons.Rounded.AutoAwesome,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
-                Spacer(Modifier.width(12.dp))
+                Spacer(Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("WordCraft", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text(
-                        if (modelReady) "$modelLabel · on this device" else "No model downloaded yet",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Text("WordCraft", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Box {
+                        TextButton(onClick = { modelMenu = true }, contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
+                            Text(
+                                "${model.label}${if (modelReady) "" else " · not downloaded"} ▾",
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+                        DropdownMenu(expanded = modelMenu, onDismissRequest = { modelMenu = false }) {
+                            LocalModel.entries.forEach { entry ->
+                                val downloaded = QwenModelStore.isModelDownloaded(context, entry)
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text(entry.label, fontWeight = FontWeight.Medium)
+                                            Text(
+                                                if (downloaded) entry.sizeLabel + " · downloaded"
+                                                else entry.sizeLabel + " · download in settings",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    },
+                                    leadingIcon = {
+                                        if (entry == model && downloaded) {
+                                            Icon(Icons.Rounded.Check, contentDescription = null)
+                                        }
+                                    },
+                                    onClick = {
+                                        modelMenu = false
+                                        if (downloaded) {
+                                            QwenModelStore.setActive(context, entry)
+                                            model = entry
+                                            modelReady = true
+                                        } else {
+                                            context.startActivity(Intent(context, SettingsActivity::class.java))
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+                IconButton(onClick = {
+                    if (keyboardEnabled) {
+                        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                        imm.showInputMethodPicker()
+                    } else {
+                        context.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
+                    }
+                }) {
+                    Icon(Icons.Rounded.Keyboard, contentDescription = "Keyboard")
                 }
                 IconButton(onClick = { context.startActivity(Intent(context, SettingsActivity::class.java)) }) {
                     Icon(Icons.Rounded.Settings, contentDescription = "Settings")
@@ -168,202 +234,267 @@ fun WordCraftApp(
             }
 
             crashReport?.let { report ->
-                Card(
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
-                ) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Rounded.BugReport,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onErrorContainer
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                "Previous session crashed",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onErrorContainer
-                            )
-                        }
-                        Text(
-                            report.text,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            maxLines = 18
-                        )
-                        Row {
-                            TextButton(onClick = {
-                                clipboard.setText(AnnotatedString(report.text))
-                                notice = "Crash details copied."
-                            }) { Text("Copy details") }
-                            TextButton(onClick = {
-                                CrashReport.dismiss(context, report)
-                                crashReport = null
-                            }) { Text("Dismiss") }
-                        }
+                CrashBanner(
+                    text = report.text,
+                    onCopy = { clipboard.setText(AnnotatedString(report.text)) },
+                    onDismiss = {
+                        CrashReport.dismiss(context, report)
+                        crashReport = null
                     }
+                )
+            }
+
+            // ------------------------------------------------------------ conversation
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                if (messages.isEmpty()) {
+                    item { WelcomeCard(onExample = { input = it }) }
+                }
+                items(messages) { message ->
+                    MessageBubble(
+                        message = message,
+                        onCopy = {
+                            clipboard.setText(AnnotatedString(message.text))
+                        },
+                        onUseAsInput = {
+                            input = message.text
+                            tone = null
+                        }
+                    )
+                }
+                if (busy) {
+                    item { TypingBubble() }
                 }
             }
 
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    "A little more you.",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    "Write or paste something, pick a tone, and read the rewrite before you send it.",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            // ---------------------------------------------------------------- input
-            Card(
-                shape = RoundedCornerShape(28.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
-            ) {
-                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Your text", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                        Spacer(Modifier.weight(1f))
-                        Text(
-                            "${draft.length} chars",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    OutlinedTextField(
-                        value = draft,
-                        onValueChange = { draft = it },
-                        modifier = Modifier.fillMaxWidth().height(170.dp),
-                        shape = RoundedCornerShape(20.dp),
-                        placeholder = { Text("Paste or write something…") },
-                        supportingText = { Text("Stays on this device.") }
-                    )
+            // ------------------------------------------------------------ composer
+            Surface(tonalElevation = 3.dp) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
                     Row(
-                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        WritingAction.entries.forEach { action ->
-                            FilterChip(
-                                selected = chosenAction == action,
-                                onClick = { chosenAction = action },
-                                label = { Text(action.label) }
-                            )
-                        }
-                    }
-                    Button(
-                        enabled = !isWorking,
-                        onClick = {
-                            when {
-                                draft.isBlank() -> notice = "Add some text first."
-                                !modelReady -> {
-                                    notice = "Download a model in settings first."
-                                    context.startActivity(Intent(context, SettingsActivity::class.java))
+                        Box {
+                            TextButton(onClick = { toneMenu = true }) {
+                                Text(
+                                    tone?.label ?: "Chat",
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                            }
+                            DropdownMenu(expanded = toneMenu, onDismissRequest = { toneMenu = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("Chat — send as a prompt") },
+                                    onClick = { tone = null; toneMenu = false }
+                                )
+                                WritingAction.entries.forEach { action ->
+                                    DropdownMenuItem(
+                                        text = { Text(action.label) },
+                                        leadingIcon = {
+                                            if (tone == action) Icon(Icons.Rounded.Check, contentDescription = null)
+                                        },
+                                        onClick = { tone = action; toneMenu = false }
+                                    )
                                 }
-                                else -> scope.launch {
-                                    isWorking = true
-                                    notice = "Running ${chosenAction.label.lowercase()} on this device…"
-                                    try {
-                                        val rewritten = OnDeviceQwenWritingAssistant(context)
-                                            .rewrite(draft, chosenAction)
-                                        result = rewritten.text
-                                        notice = "Done — nothing left this phone."
-                                    } catch (error: Throwable) {
-                                        notice = error.message ?: "Local AI failed. Try again."
-                                    } finally {
-                                        isWorking = false
+                            }
+                        }
+                        if (tone?.allowsLengthTarget == true) {
+                            Box {
+                                TextButton(onClick = { lengthMenu = true }) {
+                                    Text(length.label, style = MaterialTheme.typography.labelLarge)
+                                }
+                                DropdownMenu(expanded = lengthMenu, onDismissRequest = { lengthMenu = false }) {
+                                    LengthTarget.entries.forEach { target ->
+                                        DropdownMenuItem(
+                                            text = { Text(target.label) },
+                                            leadingIcon = {
+                                                if (length == target) Icon(Icons.Rounded.Check, contentDescription = null)
+                                            },
+                                            onClick = { length = target; lengthMenu = false }
+                                        )
                                     }
                                 }
                             }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(18.dp)
-                    ) {
-                        Icon(Icons.Rounded.AutoAwesome, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text(if (isWorking) "Working…" else chosenAction.label)
-                        Spacer(Modifier.weight(1f))
-                        Icon(Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = null)
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            notice,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.weight(1f))
-                        TextButton(onClick = {
-                            clipboard.setText(AnnotatedString(draft))
-                            notice = "Input copied."
-                        }) {
-                            Icon(Icons.Rounded.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Copy")
                         }
-                    }
-                }
-            }
-
-            // ---------------------------------------------------------------- output
-            result?.let { output ->
-                Card(
-                    shape = RoundedCornerShape(28.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-                ) {
-                    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Spacer(Modifier.weight(1f))
+                        if (!modelReady) {
                             Text(
-                                "Output",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                            Spacer(Modifier.weight(1f))
-                            Text(
-                                "${output.length} chars",
+                                "No model",
                                 style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                                color = MaterialTheme.colorScheme.error
                             )
                         }
+                    }
+                    Row(verticalAlignment = Alignment.Bottom) {
                         OutlinedTextField(
-                            value = output,
-                            onValueChange = {},
-                            readOnly = true,
-                            modifier = Modifier.fillMaxWidth().height(150.dp),
-                            shape = RoundedCornerShape(20.dp),
-                            label = { Text("Rewritten text") }
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilledTonalButton(onClick = {
-                                clipboard.setText(AnnotatedString(output))
-                                notice = "Output copied."
-                            }) {
-                                Icon(Icons.Rounded.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text("Copy")
+                            value = input,
+                            onValueChange = { input = it },
+                            modifier = Modifier.weight(1f).heightIn(min = 56.dp, max = 160.dp),
+                            shape = RoundedCornerShape(22.dp),
+                            placeholder = {
+                                Text(if (tone == null) "Ask anything…" else "Write or paste, then send")
                             }
-                            FilledTonalButton(onClick = {
-                                draft = output
-                                result = null
-                                notice = "Moved into your text."
-                            }) { Text("Use as input") }
-                            TextButton(onClick = { result = null }) { Text("Dismiss") }
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        IconButton(
+                            onClick = { send() },
+                            enabled = !busy && input.isNotBlank(),
+                            modifier = Modifier.size(52.dp)
+                                .clip(RoundedCornerShape(18.dp))
+                                .background(
+                                    if (input.isNotBlank() && !busy) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.surfaceContainerHigh
+                                )
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Rounded.Send,
+                                contentDescription = "Send",
+                                tint = if (input.isNotBlank() && !busy) MaterialTheme.colorScheme.onPrimary
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 }
             }
+        }
+    }
+}
 
+@Composable
+private fun WelcomeCard(onExample: (String) -> Unit) {
+    Card(
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+    ) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("A little more you.", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Text(
-                "Made for your voice · Private by design",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.align(Alignment.CenterHorizontally)
+                "Pick a tone and send text to rewrite it, or choose Chat and prompt the model " +
+                    "directly. Everything runs on this phone.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            TextButton(onClick = { onExample("hey can u send me the file when u get a chance") }) {
+                Text("Try an example")
+            }
+        }
+    }
+}
+
+@Composable
+private fun MessageBubble(
+    message: ChatMessage,
+    onCopy: () -> Unit,
+    onUseAsInput: () -> Unit
+) {
+    val isUser = message.role == ChatRole.USER
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+    ) {
+        Card(
+            shape = RoundedCornerShape(
+                topStart = 22.dp,
+                topEnd = 22.dp,
+                bottomStart = if (isUser) 22.dp else 6.dp,
+                bottomEnd = if (isUser) 6.dp else 22.dp
+            ),
+            colors = CardDefaults.cardColors(
+                containerColor = when {
+                    message.failed -> MaterialTheme.colorScheme.errorContainer
+                    isUser -> MaterialTheme.colorScheme.primaryContainer
+                    else -> MaterialTheme.colorScheme.surfaceContainerHigh
+                }
+            ),
+            modifier = Modifier.fillMaxWidth(0.92f)
+        ) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                message.meta?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text(
+                    message.text,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (message.failed) {
+                        MaterialTheme.colorScheme.onErrorContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    }
+                )
+                Row {
+                    TextButton(onClick = onCopy) {
+                        Icon(Icons.Rounded.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Copy")
+                    }
+                    if (!isUser && !message.failed) {
+                        TextButton(onClick = onUseAsInput) { Text("Use as prompt") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TypingBubble() {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+        Card(
+            shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)
+        ) {
+            Text(
+                "Running on this device…",
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun CrashBanner(text: String, onCopy: () -> Unit, onDismiss: () -> Unit) {
+    Card(
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Rounded.BugReport,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "Previous session crashed",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
+            }
+            Text(
+                text,
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                maxLines = 8
+            )
+            Row {
+                TextButton(onClick = onCopy) { Text("Copy") }
+                TextButton(onClick = onDismiss) { Text("Dismiss") }
+            }
         }
     }
 }
