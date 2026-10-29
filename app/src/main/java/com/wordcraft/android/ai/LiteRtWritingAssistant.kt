@@ -20,77 +20,138 @@ import kotlin.math.abs
  * instantiated — i.e. when the user actually runs a writing action — never while the app is
  * starting. Keep it that way.
  *
- * Prompting notes (this is where rewrite quality is won or lost on a small model):
- *  - The system prompt states the contract — always rewrite, never echo, answer inside
- *    `<answer>` tags — and carries one worked example.
- *  - The example lives in the **system** message, never in the user turn. Putting it in the user
- *    turn made the model continue the example instead of answering: it printed the sample input
- *    and the sample rewrite verbatim.
- *  - Sampling is explicit: temperature 0.7 / top-p 0.95 / top-k 40. The runtime default behaves
- *    close to greedy, which is how you get the input back with a comma moved.
- *  - If the answer is still a near-copy (or an echo of the example), one retry at temperature 1.0
- *    with the example removed and an explicit "change the wording" instruction.
- *  - If that also fails we say so instead of pretending the text was improved.
+ * Prompting rules learned the hard way:
+ *  - The worked example belongs in the **system** message. In the user turn the model continues
+ *    the example instead of answering it.
+ *  - Sampling is explicit (temperature 0.7 / top-p 0.95 / top-k 40). The runtime default is
+ *    near-greedy, which is how you get the input back with a comma moved.
+ *  - **Fix grammar is a different task from rewriting.** Small models summarise it: the prompt
+ *    forbids it, and a length/sentence guard rejects any answer that drops content, retries once,
+ *    and otherwise fails loudly rather than silently returning a shortened text.
+ *  - Tone actions honour a length target, and "same length" is guarded too.
  */
 internal class LiteRtWritingAssistant(private val context: Context) {
 
-    suspend fun rewrite(input: String, action: WritingAction): WritingResult =
-        withContext(Dispatchers.IO) {
-            val model = QwenModelStore.modelFile(context)
-            check(model.isFile && model.length() > 0) {
-                "Download a model in WordCraft settings before using writing actions."
-            }
-            val trimmed = trimForContext(input)
-            val engine = EngineCache.engineFor(context, model)
-
-            // Grammar fixing may legitimately return correct text untouched; every other action
-            // promises a visible change, so an echo there is a failure, not a result.
-            val expectsChange = action != WritingAction.FIX_GRAMMAR
-
-            var output = generate(engine, trimmed, action, insist = false, withExample = true)
-            if (expectsChange && (isEcho(trimmed, output) || isExampleLeak(output))) {
-                output = generate(engine, trimmed, action, insist = true, withExample = false)
-            }
-            check(output.isNotBlank()) { "The model returned an empty response." }
-            if (expectsChange) {
-                check(!isEcho(trimmed, output) && !isExampleLeak(output)) {
-                    "The model could not restyle this text. Try a shorter sentence, a different " +
-                        "tone, or a larger model in settings."
-                }
-            }
-            WritingResult(output)
-        }
-
-    private suspend fun generate(
-        engine: Engine,
+    suspend fun rewrite(
         input: String,
         action: WritingAction,
-        insist: Boolean,
-        withExample: Boolean
-    ): String {
-        val config = ConversationConfig(
-            systemInstruction = Contents.of(systemInstruction(withExample)),
-            samplerConfig = SamplerConfig(
-                topK = 40,
-                topP = 0.95,
-                temperature = if (insist) 1.0 else 0.7,
-                seed = 0
-            )
-        )
-        engine.createConversation(config).use { conversation ->
-            val response = conversation.sendMessageAsync(userPrompt(input, action, insist)).toList()
-                .joinToString(separator = "") { it.toString() }
-            return clean(response)
+        length: LengthTarget = LengthTarget.SAME
+    ): WritingResult = withContext(Dispatchers.IO) {
+        val engine = engine()
+        val trimmed = trimForContext(input)
+        if (action == WritingAction.FIX_GRAMMAR) {
+            WritingResult(grammarFix(engine, trimmed))
+        } else {
+            WritingResult(toneRewrite(engine, trimmed, action, length))
         }
     }
 
-    private fun systemInstruction(withExample: Boolean): String = buildString {
+    /** Free-form prompt for the chat screen. */
+    suspend fun ask(prompt: String): WritingResult = withContext(Dispatchers.IO) {
+        val engine = engine()
+        val answer = generate(
+            engine = engine,
+            system = CHAT_SYSTEM,
+            user = prompt,
+            temperature = 0.7,
+            extractAnswerTags = false
+        )
+        check(answer.isNotBlank()) { "The model returned an empty response." }
+        WritingResult(answer)
+    }
+
+    // ------------------------------------------------------------------ grammar
+
+    private suspend fun grammarFix(engine: Engine, input: String): String {
+        val sentences = sentenceCount(input)
+        val characters = input.count { !it.isWhitespace() }
+        var output = generate(
+            engine = engine,
+            system = GRAMMAR_SYSTEM,
+            user = grammarPrompt(input, sentences, characters, insist = false),
+            temperature = 0.5,
+            extractAnswerTags = true
+        )
+        if (droppedContent(input, output)) {
+            output = generate(
+                engine = engine,
+                system = GRAMMAR_SYSTEM,
+                user = grammarPrompt(input, sentences, characters, insist = true),
+                temperature = 0.5,
+                extractAnswerTags = true
+            )
+        }
+        check(output.isNotBlank()) { "The model returned an empty response." }
+        check(!droppedContent(input, output)) {
+            "The model kept summarising instead of correcting (${input.length} → ${output.length} " +
+                "characters). Try a shorter selection, or a larger model in settings."
+        }
+        return output
+    }
+
+    private fun grammarPrompt(input: String, sentences: Int, characters: Int, insist: Boolean): String =
+        buildString {
+            appendLine("Correct the spelling, grammar, punctuation and capitalisation of the text below.")
+            appendLine("The text has $sentences sentences and about $characters characters.")
+            appendLine("Your correction must also have $sentences sentences and about $characters characters.")
+            if (insist) {
+                appendLine("Do NOT shorten. Do NOT summarise. Do NOT drop any sentence. Keep every idea.")
+            }
+            appendLine()
+            appendLine("Text: $input")
+            appendLine()
+            appendLine("Reply with <answer> and </answer> only.")
+        }
+
+    /** True when the answer lost content: shorter text, or fewer sentences than the input. */
+    private fun droppedContent(input: String, output: String): Boolean {
+        val inChars = input.count { !it.isWhitespace() }
+        val outChars = output.count { !it.isWhitespace() }
+        if (inChars == 0 || outChars == 0) return false
+        val ratio = outChars.toDouble() / inChars
+        val lostSentences = sentenceCount(output) < sentenceCount(input) - 1
+        return ratio < 0.85 || lostSentences
+    }
+
+    // ------------------------------------------------------------------ tones
+
+    private suspend fun toneRewrite(
+        engine: Engine,
+        input: String,
+        action: WritingAction,
+        length: LengthTarget
+    ): String {
+        var output = generate(
+            engine = engine,
+            system = toneSystem(withExample = true, length = length),
+            user = tonePrompt(input, action, length, insist = false),
+            temperature = 0.7,
+            extractAnswerTags = true
+        )
+        if (isEcho(input, output) || isExampleLeak(output) || collapsedForSameLength(input, output, length)) {
+            output = generate(
+                engine = engine,
+                system = toneSystem(withExample = false, length = length),
+                user = tonePrompt(input, action, length, insist = true),
+                temperature = 1.0,
+                extractAnswerTags = true
+            )
+        }
+        check(output.isNotBlank()) { "The model returned an empty response." }
+        check(!isEcho(input, output) && !isExampleLeak(output)) {
+            "The model could not restyle this text. Try a shorter sentence, a different tone, or a " +
+                "larger model in settings."
+        }
+        return output
+    }
+
+    private fun toneSystem(withExample: Boolean, length: LengthTarget): String = buildString {
         appendLine("You are a copy editor inside a phone keyboard. You rewrite text on request.")
         appendLine("Rules:")
         appendLine("- Always rewrite. Never return the input unchanged.")
         appendLine("- The rewrite must clearly match the requested style.")
         appendLine("- Keep the meaning, facts, names, numbers and language.")
-        appendLine("- Keep the length within about 25% of the original.")
+        appendLine("- Length: ${length.instruction}")
         appendLine("- Put ONLY the rewritten text between <answer> and </answer>.")
         if (withExample) {
             appendLine()
@@ -100,9 +161,15 @@ internal class LiteRtWritingAssistant(private val context: Context) {
         }
     }
 
-    private fun userPrompt(input: String, action: WritingAction, insist: Boolean): String = buildString {
+    private fun tonePrompt(
+        input: String,
+        action: WritingAction,
+        length: LengthTarget,
+        insist: Boolean
+    ): String = buildString {
         appendLine("Style: ${action.label}")
         appendLine("Goal: ${action.instruction}")
+        appendLine("Length: ${length.label} — ${length.instruction}")
         appendLine("Text: $input")
         appendLine()
         if (insist) {
@@ -111,16 +178,43 @@ internal class LiteRtWritingAssistant(private val context: Context) {
                     "not copy the original sentences. Reply with <answer> and </answer> only."
             )
         } else {
-            appendLine(
-                "Rewrite the text above in the ${action.label} style. " +
-                    "Reply with <answer> and </answer> only."
-            )
+            appendLine("Rewrite the text above in the ${action.label} style. Reply with <answer> and </answer> only.")
         }
     }
 
-    /** Extracts the answer, tolerating the wrappers small models add. */
-    private fun clean(raw: String): String {
+    /** "Same length" is a promise too: a 70% collapse means the model summarised. */
+    private fun collapsedForSameLength(input: String, output: String, length: LengthTarget): Boolean {
+        if (length != LengthTarget.SAME) return false
+        val inChars = input.count { !it.isWhitespace() }
+        val outChars = output.count { !it.isWhitespace() }
+        if (inChars == 0) return false
+        return outChars.toDouble() / inChars < 0.7
+    }
+
+    // ------------------------------------------------------------------ generation
+
+    private suspend fun generate(
+        engine: Engine,
+        system: String,
+        user: String,
+        temperature: Double,
+        extractAnswerTags: Boolean
+    ): String {
+        val config = ConversationConfig(
+            systemInstruction = Contents.of(system),
+            samplerConfig = SamplerConfig(topK = 40, topP = 0.95, temperature = temperature, seed = 0)
+        )
+        engine.createConversation(config).use { conversation ->
+            val response = conversation.sendMessageAsync(user).toList()
+                .joinToString(separator = "") { it.toString() }
+            return if (extractAnswerTags) extractAnswer(response) else stripWrappers(response)
+        }
+    }
+
+    /** Extracts the `<answer>` block, tolerating the wrappers small models add. */
+    private fun extractAnswer(raw: String): String {
         var text = raw.trim()
+        if (text.contains("</thought>")) text = text.substringAfterLast("</thought>").trim()
         val open = text.indexOf("<answer>", ignoreCase = true)
         if (open >= 0) {
             val start = open + "<answer>".length
@@ -128,14 +222,14 @@ internal class LiteRtWritingAssistant(private val context: Context) {
             text = if (close > start) text.substring(start, close) else text.substring(start)
             return tidy(text)
         }
-        if (text.contains("</thought>")) {
-            text = text.substringAfterLast("</thought>")
-        }
-        // Last resort: the model continued the example pattern.
         val marker = listOf("REWRITE:", "Answer:").firstOrNull { text.contains(it, ignoreCase = true) }
-        if (marker != null) {
-            text = text.substringAfterLast(marker, "")
-        }
+        if (marker != null) text = text.substringAfterLast(marker, "")
+        return tidy(text)
+    }
+
+    private fun stripWrappers(raw: String): String {
+        var text = raw.trim()
+        if (text.contains("</thought>")) text = text.substringAfterLast("</thought>").trim()
         return tidy(text)
     }
 
@@ -146,8 +240,7 @@ internal class LiteRtWritingAssistant(private val context: Context) {
         }
         text = text.removeSurrounding("\"").removeSurrounding("“", "”").trim()
         text = text.removePrefix("<<<").removeSuffix(">>>").trim()
-        val firstParagraph = text.split("\n\n").firstOrNull()?.trim().orEmpty()
-        return if (firstParagraph.isNotEmpty()) firstParagraph else text
+        return text
     }
 
     /** True when the model handed the input straight back (with at most cosmetic edits). */
@@ -170,6 +263,9 @@ internal class LiteRtWritingAssistant(private val context: Context) {
             text.replace(Regex("[^a-z]"), "") == EXAMPLE_ANSWER.replace(Regex("[^a-z]"), "")
     }
 
+    private fun sentenceCount(text: String): Int =
+        text.split(Regex("[.!?]+")).count { it.isNotBlank() }
+
     /** The models have a small context; keep the tail, which is what the user is looking at. */
     private fun trimForContext(input: String): String {
         val clean = input.trim()
@@ -179,10 +275,34 @@ internal class LiteRtWritingAssistant(private val context: Context) {
         return if (firstBreak in 1 until tail.length - 1) tail.substring(firstBreak + 1).trim() else tail
     }
 
+    private fun engine(): Engine {
+        val model = QwenModelStore.modelFile(context)
+        check(model.isFile && model.length() > 0) {
+            "Download a model in WordCraft settings before using writing actions."
+        }
+        return EngineCache.engineFor(context, model)
+    }
+
     private companion object {
-        const val MAX_INPUT_CHARS = 900
+        const val MAX_INPUT_CHARS = 1800
         const val EXAMPLE_INPUT = "hey can u send the file"
         const val EXAMPLE_ANSWER = "Could you please send the file?"
+
+        val GRAMMAR_SYSTEM = """
+            You are a proofreader. You correct spelling, grammar, punctuation and capitalisation.
+            Hard rules:
+            - Never shorten, summarise, reorder or omit anything.
+            - Every sentence of the input must appear in the output, in the same order.
+            - Keep the author's words wherever they are already correct.
+            - Do not add new ideas, comments or examples.
+            - Put ONLY the corrected text between <answer> and </answer>.
+        """.trimIndent()
+
+        val CHAT_SYSTEM = """
+            You are WordCraft, a concise writing assistant running on the user's phone.
+            Answer the user's request directly and briefly. If they ask for text, give the text only,
+            without preamble or commentary.
+        """.trimIndent()
     }
 }
 
