@@ -45,6 +45,27 @@ object QwenModelStore {
     }
 
     /**
+     * Removes model files that are no longer in [LocalModel]. Downloads from earlier builds
+     * (Qwen3, Qwen2.5) would otherwise sit in app storage forever — up to several gigabytes.
+     */
+    fun pruneUnknownModels(context: Context) {
+        val known = LocalModel.entries.map { it.fileName }.toSet()
+        runCatching {
+            context.filesDir.listFiles()?.forEach { file ->
+                val name = file.name
+                if (!name.endsWith(".litertlm") && !name.endsWith(".litertlm.part")) return@forEach
+                if (name.removeSuffix(".part") !in known) file.delete()
+            }
+        }
+        // Keep the stored id in step with the catalogue after a model is retired.
+        val stored = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_ACTIVE, null)
+        if (stored != null && LocalModel.entries.none { it.id == stored }) {
+            setActive(context, LocalModel.fromId(stored))
+        }
+    }
+
+    /**
      * Downloads [model] into app-private storage.
      *
      * [onProgress] is throttled to roughly four updates a second and is always invoked on the
