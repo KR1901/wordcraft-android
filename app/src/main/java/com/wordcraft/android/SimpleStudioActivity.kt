@@ -125,7 +125,12 @@ class SimpleStudioActivity : Activity() {
             setOnClickListener { startActivity(Intent(this@SimpleStudioActivity, DiagnosticsActivity::class.java)) }
         }, LinearLayout.LayoutParams(-1, -2))
 
-        setContentView(ScrollView(this).apply { addView(root) })
+        setContentView(ScrollView(this).apply {
+            // targetSdk 36 means edge-to-edge is enforced; without this the title sits under
+            // the status bar.
+            fitsSystemWindows = true
+            addView(root)
+        })
 
         // Text handed over by the keyboard's Grammar/Rewrite buttons.
         val handoff = intent?.getStringExtra(MainActivity.EXTRA_KEYBOARD_TEXT)
