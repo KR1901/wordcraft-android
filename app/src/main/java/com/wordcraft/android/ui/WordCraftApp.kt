@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -133,7 +134,9 @@ fun WordCraftApp(
             }
             try {
                 val result = if (action == null) assistant.ask(text) else assistant.rewrite(text, action, length)
-                messages = messages + ChatMessage(ChatRole.ASSISTANT, result.text, meta)
+                // e.g. "3 corrections" or "No grammar issues found" — never a silent no-op.
+                val note = result.explanation?.let { " · $it" }.orEmpty()
+                messages = messages + ChatMessage(ChatRole.ASSISTANT, result.text, meta + note)
             } catch (error: Throwable) {
                 messages = messages + ChatMessage(
                     ChatRole.ASSISTANT,
@@ -153,6 +156,7 @@ fun WordCraftApp(
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.surface)
                 .padding(insets)
+                .imePadding()
         ) {
             // ------------------------------------------------------------ top bar
             Row(
