@@ -81,7 +81,8 @@ sealed interface AiState {
         val action: String,
         val original: String,
         val rewritten: String,
-        val hadSelection: Boolean
+        val hadSelection: Boolean,
+        val note: String? = null
     ) : AiState
     data class Failure(val action: String, val message: String) : AiState
 }
@@ -495,7 +496,7 @@ class KeyboardController(
         aiJob = scope.launch {
             try {
                 val result = OnDeviceQwenWritingAssistant(service).rewrite(original, action)
-                aiState = AiState.Result(action.label, original, result.text.trim(), hadSelection)
+                aiState = AiState.Result(action.label, original, result.text.trim(), hadSelection, result.explanation)
             } catch (error: Throwable) {
                 aiState = AiState.Failure(action.label, error.message ?: "On-device rewrite failed.")
             }
@@ -738,6 +739,9 @@ private fun AiPanel(controller: KeyboardController) {
                     overflow = TextOverflow.Ellipsis,
                     color = MaterialTheme.colorScheme.onSurface
                 )
+                state.note?.let { note ->
+                    Text(note, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ActionPill("Replace", controller, accent = true) { controller.applyAiResult() }
                     ActionPill("Dismiss", controller, accent = false) { controller.dismissAi() }
