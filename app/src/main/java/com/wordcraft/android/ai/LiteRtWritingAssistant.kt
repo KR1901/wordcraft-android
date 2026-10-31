@@ -13,9 +13,7 @@ import com.google.ai.edge.litertlm.ThinkingConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
 import java.io.File
-import kotlin.math.abs
 
 /**
  * The only class in the app that touches LiteRT-LM.
@@ -70,52 +68,19 @@ internal class LiteRtWritingAssistant(private val context: Context) {
 
     private suspend fun grammarFix(engine: Engine, input: String): WritingResult {
         var raw = generate(engine, GRAMMAR_EDITS_SYSTEM, input, temperature = 0.2)
-        var edits = parseEdits(raw)
+        var edits = GrammarEdits.parse(raw)
         if (edits.isEmpty() && !raw.contains("[")) {
             // No JSON at all: one retry with the stricter wording before concluding "no issues".
             raw = generate(engine, GRAMMAR_EDITS_SYSTEM_STRICT, input, temperature = 0.2)
-            edits = parseEdits(raw)
+            edits = GrammarEdits.parse(raw)
         }
-        val corrected = applyEdits(input, edits)
+        val corrected = GrammarEdits.apply(input, edits)
         val explanation = if (edits.isEmpty()) {
             "No grammar issues found"
         } else {
             "${edits.size} correction${if (edits.size == 1) "" else "s"}"
         }
         return WritingResult(corrected, explanation)
-    }
-
-    /** Parses the model's JSON edit list, tolerating code fences and stray prose. */
-    private fun parseEdits(raw: String): List<Pair<String, String>> {
-        val start = raw.indexOf('[')
-        val end = raw.lastIndexOf(']')
-        if (start < 0 || end <= start) return emptyList()
-        return runCatching {
-            val array = JSONArray(raw.substring(start, end + 1))
-            buildList {
-                for (index in 0 until array.length()) {
-                    val item = array.optJSONObject(index) ?: continue
-                    val find = item.optString("find").takeIf { it.isNotBlank() } ?: continue
-                    val replace = item.optString("replace", "")
-                    if (find != replace && find.length in 1..400) add(find to replace)
-                }
-            }
-        }.getOrDefault(emptyList())
-    }
-
-    /**
-     * Applies edits to the original text. Spans that are not found verbatim are skipped, so a
-     * hallucinated "find" can never damage the text.
-     */
-    private fun applyEdits(input: String, edits: List<Pair<String, String>>): String {
-        var text = input
-        for ((find, replace) in edits) {
-            val index = text.indexOf(find)
-            if (index >= 0) {
-                text = text.substring(0, index) + replace + text.substring(index + find.length)
-            }
-        }
-        return text
     }
 
     // ------------------------------------------------------------------ tones
@@ -127,46 +92,23 @@ internal class LiteRtWritingAssistant(private val context: Context) {
         length: LengthTarget
     ): String {
         var output = generate(engine, toneSystem(action, length, insist = false), input, temperature = 0.7)
-        if (isEcho(input, output) || isDegenerate(output) || collapsed(input, output, length) || isFragment(input, output)) {
+        if (RewriteQuality.isEcho(input, output) || RewriteQuality.isDegenerate(output) ||
+            RewriteQuality.isCollapsed(input, output, length == LengthTarget.SAME) ||
+            RewriteQuality.isFragment(input, output)
+        ) {
             output = generate(engine, toneSystem(action, length, insist = true), input, temperature = 0.9)
         }
         check(output.isNotBlank()) { "The model returned an empty response." }
-        check(!isEcho(input, output)) {
+        check(!RewriteQuality.isEcho(input, output)) {
             "The model copied the text instead of restyling it. Try a different tone, or the larger model."
         }
-        check(!isDegenerate(output)) {
+        check(!RewriteQuality.isDegenerate(output)) {
             "The model started repeating itself. Try again, or switch to the larger model."
         }
-        check(!isFragment(input, output)) {
+        check(!RewriteQuality.isFragment(input, output)) {
             "The model returned only a fragment instead of a rewrite. Try again, or use the larger model."
         }
         return output
-    }
-
-    /**
-     * Detects the "same paragraph three times" loop these small models fall into. A long sentence
-     * appearing twice is never a legitimate rewrite of a paragraph.
-     */
-    private fun isDegenerate(output: String): Boolean {
-        val sentences = output.split(Regex("(?<=[.!?])\\s+"))
-            .map { it.trim() }
-            .filter { it.length > 40 }
-        if (sentences.size < 3) return false
-        val counts = sentences.groupingBy { it }.eachCount()
-        return counts.values.any { it >= 2 }
-    }
-
-    /** A one-word answer for a paragraph-long input is a failure, not a short rewrite. */
-    private fun isFragment(input: String, output: String): Boolean =
-        input.length > 40 && output.length < input.length / 5
-
-    /** "Same length" is a promise too: a 70% collapse means the model summarised. */
-    private fun collapsed(input: String, output: String, length: LengthTarget): Boolean {
-        if (length != LengthTarget.SAME) return false
-        val inChars = input.count { !it.isWhitespace() }
-        val outChars = output.count { !it.isWhitespace() }
-        if (inChars == 0) return false
-        return outChars.toDouble() / inChars < 0.7
     }
 
     private fun toneSystem(action: WritingAction, length: LengthTarget, insist: Boolean): String =
@@ -225,24 +167,6 @@ internal class LiteRtWritingAssistant(private val context: Context) {
         }
         if (cut != null) text = text.substringBefore(cut).trim()
         return text
-    }
-
-    /**
-     * True when the model handed the input straight back. The length tolerance is relative (5%),
-     * because an absolute tolerance let "carry baggage" → "carry the baggage" slip through as a
-     * legitimate rewrite.
-     */
-    private fun isEcho(original: String, output: String): Boolean {
-        val a = original.filter { it.isLetterOrDigit() }.lowercase()
-        val b = output.filter { it.isLetterOrDigit() }.lowercase()
-        if (a.isEmpty() || b.isEmpty()) return false
-        if (a == b) return true
-        val wordsA = original.lowercase().split(Regex("\\s+")).filter { it.isNotBlank() }.toSet()
-        val wordsB = output.lowercase().split(Regex("\\s+")).filter { it.isNotBlank() }.toSet()
-        if (wordsA.isEmpty() || wordsB.isEmpty()) return false
-        val overlap = wordsA.intersect(wordsB).size.toDouble() / maxOf(wordsA.size, wordsB.size)
-        val lengthClose = abs(a.length - b.length) <= maxOf(8, a.length / 20)
-        return overlap > 0.9 && lengthClose
     }
 
     /** The models have a small context; keep the tail, which is what the user is looking at. */
