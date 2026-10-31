@@ -5,8 +5,8 @@ A modern Android writing assistant and keyboard scaffold built with Jetpack Comp
 ## Included
 
 - Compose writing studio with Material 3, system light/dark mode, editable draft, character count, clipboard copy, selectable writing actions, and keyboard setup shortcut.
-- Native Android keyboard (IME) with letters, shift, number and symbol layouts, a small autocorrect strip, delete, return and space, plus a toolbar that hands selected text to the studio.
-- On-device Qwen3 0.6B INT4 writing assistant via LiteRT-LM: model download in Settings, then local inference for grammar correction, paraphrasing, tone changes, simplification, concise rewrites, and expansion. Nothing leaves the phone.
+- Native Android keyboard (IME) with letters, shift, number and symbol layouts, a learning autocorrect strip, hold-to-clear delete, swipe-to-delete, key previews, clipboard history and inline AI rewrites.
+- On-device writing assistant via LiteRT-LM. Choose Qwen3.5 0.8B or 2B in Settings, download once, then run grammar correction, paraphrasing, thirteen tones and length targets locally. Nothing leaves the phone.
 - Crash reporting that survives a startup failure: the studio shows why the previous run ended (see below).
 - GitHub Actions CI that runs tests and uploads a debug APK artifact on pushes to `main`.
 - Tagged APK release workflow that builds and attaches an APK to a GitHub Release.
@@ -18,9 +18,18 @@ This is a starting implementation, not yet a complete commercial keyboard. The I
 
 ## On-device AI
 
-WordCraft uses Google AI Edge LiteRT-LM (`com.google.ai.edge.litertlm:litertlm-android`, pinned to 0.18.1) to run the Apache-2.0 Qwen3 0.6B INT4 model locally. Open **Settings → Download Qwen3 model** to download the model (approximately 347 MB) once. It is stored in the app-private files directory, excluded from the APK, and then runs without an internet connection. The first inference loads weights and the native runtime, so it takes noticeably longer than later ones; CPU speed and RAM use depend on the phone.
+WordCraft uses Google AI Edge LiteRT-LM (`com.google.ai.edge.litertlm:litertlm-android`, pinned to 0.18.1) to run Apache-2.0 Qwen3.5 models locally. Open **Settings → Models**, download Qwen3.5 0.8B (965 MB) or 2B (2.0 GB), and the download becomes the active model. Files live in the app-private files directory, never in the APK, and run without a connection afterwards. The engine is cached after the first use; CPU speed and RAM use depend on the phone, and switching models closes the previous engine.
 
-The model is served from the [LiteRT Community Qwen3-0.6B-int4 repository](https://huggingface.co/litert-community/Qwen3-0.6B-int4). Review its model card and license before redistribution. No provider API key is needed, and draft text is not sent to a remote inference API. A future cloud-provider option should use an authenticated HTTPS backend and explicit user consent.
+Models are served from the LiteRT Community on Hugging Face: [Qwen3.5-0.8B](https://huggingface.co/litert-community/Qwen3.5-0.8B) and [Qwen3.5-2B](https://huggingface.co/litert-community/Qwen3.5-2B). Every catalogue URL is checked to answer a plain unauthenticated request, so a gated repository can never ship as an option (Gemma's are gated and were removed for exactly that reason). No provider API key is needed and draft text is not sent to a remote inference API.
+
+### How the AI is driven
+
+Prompting here is measured, not guessed. Against the real model:
+
+- **Grammar is an edit list, not a rewrite.** The model returns `[{"find": ..., "replace": ...}]` and the app applies those spans to your text. Content loss is structurally impossible; an unmatched span is skipped. `GrammarEdits` is unit-tested.
+- **Tone work**: instruction in the system message, the user turn is only the text. Instructions after the text, or metadata like sentence counts, get echoed into the answer.
+- Sampling is explicit (temperature 0.3 proofreading / 0.7 restyling, top-p 0.95, top-k 40), thinking is disabled, and repetition penalties are on.
+- Guards reject echoes, one-word fragments, repeated paragraphs and summaries dressed as "same length" (`RewriteQuality`, unit-tested).
 
 ### Two rules for the native runtime
 
