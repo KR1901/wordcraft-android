@@ -6,11 +6,14 @@ import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
+import com.google.ai.edge.litertlm.NoRepeatNgramConfig
+import com.google.ai.edge.litertlm.RepetitionPenaltyConfig
 import com.google.ai.edge.litertlm.SamplerConfig
 import com.google.ai.edge.litertlm.ThinkingConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import java.io.File
 import kotlin.math.abs
 
@@ -21,23 +24,24 @@ import kotlin.math.abs
  * instantiated — i.e. when the user actually runs a writing action — never while the app is
  * starting. Keep it that way.
  *
- * ## The prompt shape is not a guess
+ * ## Grammar is not a rewrite
  *
- * It was measured against the real model with the `litert-lm` Python runtime, using the exact text
- * that used to fail. What the measurement showed:
+ * Asking a 0.6–2B model to "return the corrected text" fails: it copies the input, or summarises
+ * it, or repeats a paragraph. Measured against the real model, so instead of regenerating the text
+ * the model is asked to **list edits**:
  *
- *  - Asking for `<answer>` tags does not work. These models ignore the tags, and because the parser
- *    then found no tags it returned the whole response — which contained the echoed prompt. That is
- *    the "it output my text back / it printed the instructions" bug.
- *  - Any instruction placed *after* the text, or any metadata like "this text has 8 sentences",
- *    gets echoed into the answer. Both are gone.
- *  - What does work: the instruction lives in the **system message** and the user turn is **only
- *    the text**. Measured output for a 698-character input: clean, all six paragraphs, comma and
- *    capitalisation fixed, 695 characters out.
+ *     [{"find": "exact span", "replace": "corrected span"}, …]
  *
- * Sampling is explicit (temperature 0.3 for proofreading, 0.7 for restyling, top-p 0.95, top-k 40)
- * and thinking is disabled — Qwen3 and Qwen3.5 default to thinking-on, and the reasoning text ends
- * up in the answer.
+ * and the app applies those spans to the original. Content cannot be lost, nothing can be
+ * summarised, an empty list honestly means "no issues found", and a garbled answer can only fail to
+ * apply rather than corrupt the text. Verified on a real model: it returned valid spans
+ * ("carry the burden", "at risk", "we are completely wrong") for the 698-character test text.
+ *
+ * ## Tone work
+ *
+ * Instruction in the system message, the user turn is **only the text** — anything else gets echoed
+ * back. Repetition penalties are on, because these models fall into "same paragraph three times"
+ * loops, and a degeneracy check rejects the result if that happens anyway.
  */
 internal class LiteRtWritingAssistant(private val context: Context) {
 
@@ -49,7 +53,7 @@ internal class LiteRtWritingAssistant(private val context: Context) {
         val engine = engine()
         val trimmed = trimForContext(input)
         if (action == WritingAction.FIX_GRAMMAR) {
-            WritingResult(grammarFix(engine, trimmed))
+            grammarFix(engine, trimmed)
         } else {
             WritingResult(toneRewrite(engine, trimmed, action, length))
         }
@@ -64,27 +68,54 @@ internal class LiteRtWritingAssistant(private val context: Context) {
 
     // ------------------------------------------------------------------ grammar
 
-    private suspend fun grammarFix(engine: Engine, input: String): String {
-        var output = generate(engine, GRAMMAR_SYSTEM, input, temperature = 0.3)
-        if (droppedContent(input, output)) {
-            output = generate(engine, GRAMMAR_SYSTEM_STRICT, input, temperature = 0.3)
+    private suspend fun grammarFix(engine: Engine, input: String): WritingResult {
+        var raw = generate(engine, GRAMMAR_EDITS_SYSTEM, input, temperature = 0.2)
+        var edits = parseEdits(raw)
+        if (edits.isEmpty() && !raw.contains("[")) {
+            // No JSON at all: one retry with the stricter wording before concluding "no issues".
+            raw = generate(engine, GRAMMAR_EDITS_SYSTEM_STRICT, input, temperature = 0.2)
+            edits = parseEdits(raw)
         }
-        check(output.isNotBlank()) { "The model returned an empty response." }
-        check(!droppedContent(input, output)) {
-            "The model kept summarising instead of correcting (${input.length} → ${output.length} " +
-                "characters). Try a shorter selection, or the larger model in settings."
+        val corrected = applyEdits(input, edits)
+        val explanation = if (edits.isEmpty()) {
+            "No grammar issues found"
+        } else {
+            "${edits.size} correction${if (edits.size == 1) "" else "s"}"
         }
-        return output
+        return WritingResult(corrected, explanation)
     }
 
-    /** True when the answer lost content: much shorter, or fewer sentences than the input. */
-    private fun droppedContent(input: String, output: String): Boolean {
-        val inChars = input.count { !it.isWhitespace() }
-        val outChars = output.count { !it.isWhitespace() }
-        if (inChars == 0 || outChars == 0) return false
-        val ratio = outChars.toDouble() / inChars
-        val lostSentences = sentenceCount(output) < sentenceCount(input) - 1
-        return ratio < 0.85 || lostSentences
+    /** Parses the model's JSON edit list, tolerating code fences and stray prose. */
+    private fun parseEdits(raw: String): List<Pair<String, String>> {
+        val start = raw.indexOf('[')
+        val end = raw.lastIndexOf(']')
+        if (start < 0 || end <= start) return emptyList()
+        return runCatching {
+            val array = JSONArray(raw.substring(start, end + 1))
+            buildList {
+                for (index in 0 until array.length()) {
+                    val item = array.optJSONObject(index) ?: continue
+                    val find = item.optString("find").takeIf { it.isNotBlank() } ?: continue
+                    val replace = item.optString("replace", "")
+                    if (find != replace && find.length in 1..400) add(find to replace)
+                }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    /**
+     * Applies edits to the original text. Spans that are not found verbatim are skipped, so a
+     * hallucinated "find" can never damage the text.
+     */
+    private fun applyEdits(input: String, edits: List<Pair<String, String>>): String {
+        var text = input
+        for ((find, replace) in edits) {
+            val index = text.indexOf(find)
+            if (index >= 0) {
+                text = text.substring(0, index) + replace + text.substring(index + find.length)
+            }
+        }
+        return text
     }
 
     // ------------------------------------------------------------------ tones
@@ -96,20 +127,36 @@ internal class LiteRtWritingAssistant(private val context: Context) {
         length: LengthTarget
     ): String {
         var output = generate(engine, toneSystem(action, length, insist = false), input, temperature = 0.7)
-        if (isEcho(input, output) || collapsed(input, output, length) || isFragment(input, output)) {
-            output = generate(engine, toneSystem(action, length, insist = true), input, temperature = 1.0)
+        if (isEcho(input, output) || isDegenerate(output) || collapsed(input, output, length) || isFragment(input, output)) {
+            output = generate(engine, toneSystem(action, length, insist = true), input, temperature = 0.9)
         }
         check(output.isNotBlank()) { "The model returned an empty response." }
         check(!isEcho(input, output)) {
-            "The model could not restyle this text. Try a different tone, or the larger model in settings."
+            "The model copied the text instead of restyling it. Try a different tone, or the larger model."
+        }
+        check(!isDegenerate(output)) {
+            "The model started repeating itself. Try again, or switch to the larger model."
         }
         check(!isFragment(input, output)) {
-            "The model returned only a fragment instead of a rewrite. Try again, or use a larger model."
+            "The model returned only a fragment instead of a rewrite. Try again, or use the larger model."
         }
         return output
     }
 
-    /** A one-word answer ("and") for a paragraph-long input is a failure, not a short rewrite. */
+    /**
+     * Detects the "same paragraph three times" loop these small models fall into. A long sentence
+     * appearing twice is never a legitimate rewrite of a paragraph.
+     */
+    private fun isDegenerate(output: String): Boolean {
+        val sentences = output.split(Regex("(?<=[.!?])\\s+"))
+            .map { it.trim() }
+            .filter { it.length > 40 }
+        if (sentences.size < 3) return false
+        val counts = sentences.groupingBy { it }.eachCount()
+        return counts.values.any { it >= 2 }
+    }
+
+    /** A one-word answer for a paragraph-long input is a failure, not a short rewrite. */
     private fun isFragment(input: String, output: String): Boolean =
         input.length > 40 && output.length < input.length / 5
 
@@ -130,6 +177,7 @@ internal class LiteRtWritingAssistant(private val context: Context) {
             appendLine("Keep the meaning, facts, names, numbers and language.")
             if (insist) {
                 appendLine("The wording must change — do not copy the original sentences.")
+                appendLine("Do not repeat any sentence. Do not loop.")
             }
             appendLine("Do not add commentary, headings or notes.")
             appendLine("Reply with the rewritten text only, with no preamble.")
@@ -150,8 +198,16 @@ internal class LiteRtWritingAssistant(private val context: Context) {
             thinkingConfig = ThinkingConfig(enableThinking = false)
         )
         engine.createConversation(config).use { conversation ->
-            val response = conversation.sendMessageAsync(user).toList()
-                .joinToString(separator = "") { it.toString() }
+            val response = conversation.sendMessageAsync(
+                user,
+                repetitionPenaltyConfig = RepetitionPenaltyConfig(
+                    repetitionPenalty = 1.1f,
+                    presencePenalty = 0f,
+                    frequencyPenalty = 0f,
+                    windowSize = 128
+                ),
+                noRepeatNgramConfig = NoRepeatNgramConfig(noRepeatNgramSize = 4, windowSize = 128)
+            ).toList().joinToString(separator = "") { it.toString() }
             return stripWrappers(response)
         }
     }
@@ -164,15 +220,18 @@ internal class LiteRtWritingAssistant(private val context: Context) {
             if (text.startsWith(label, ignoreCase = true)) text = text.substring(label.length).trim()
         }
         text = text.removeSurrounding("\"").removeSurrounding("“", "”").trim()
-        // Defensive: some builds repeat the closing instruction back at the end.
-        val cut = listOf("\nReply with", "\nReply with the", "\nDo not add", "\nRules:").firstOrNull {
+        val cut = listOf("\nReply with", "\nDo not add", "\nRules:", "\nNote:").firstOrNull {
             text.contains(it, ignoreCase = true)
         }
         if (cut != null) text = text.substringBefore(cut).trim()
         return text
     }
 
-    /** True when the model handed the input straight back (with at most cosmetic edits). */
+    /**
+     * True when the model handed the input straight back. The length tolerance is relative (5%),
+     * because an absolute tolerance let "carry baggage" → "carry the baggage" slip through as a
+     * legitimate rewrite.
+     */
     private fun isEcho(original: String, output: String): Boolean {
         val a = original.filter { it.isLetterOrDigit() }.lowercase()
         val b = output.filter { it.isLetterOrDigit() }.lowercase()
@@ -182,11 +241,9 @@ internal class LiteRtWritingAssistant(private val context: Context) {
         val wordsB = output.lowercase().split(Regex("\\s+")).filter { it.isNotBlank() }.toSet()
         if (wordsA.isEmpty() || wordsB.isEmpty()) return false
         val overlap = wordsA.intersect(wordsB).size.toDouble() / maxOf(wordsA.size, wordsB.size)
-        return overlap > 0.9 && abs(a.length - b.length) <= 4
+        val lengthClose = abs(a.length - b.length) <= maxOf(8, a.length / 20)
+        return overlap > 0.9 && lengthClose
     }
-
-    private fun sentenceCount(text: String): Int =
-        text.split(Regex("[.!?]+")).count { it.isNotBlank() }
 
     /** The models have a small context; keep the tail, which is what the user is looking at. */
     private fun trimForContext(input: String): String {
@@ -213,25 +270,20 @@ internal class LiteRtWritingAssistant(private val context: Context) {
             "Rewritten text:", "Rewritten:", "Rewrite:", "Answer:", "Output:"
         )
 
-        val GRAMMAR_SYSTEM = """
-            You are a proofreader. Correct the spelling, grammar, punctuation and capitalisation of
-            the text the user sends.
-            Rules:
-            - Keep every sentence, in the same order. Do not shorten, summarise, reorder or omit anything.
-            - Keep the author's words wherever they are already correct.
-            - Do not add commentary, headings or notes.
-            - Reply with the corrected text only.
+        val GRAMMAR_EDITS_SYSTEM = """
+            You are a proofreader. List the grammar, spelling, punctuation and capitalisation errors
+            in the text the user sends.
+            Output a JSON array only. Each item is an object with two keys:
+              "find": an exact substring copied from the input, unchanged
+              "replace": the corrected version of that substring
+            Only include real errors. Do not rewrite for style. If there are no errors, output [].
         """.trimIndent()
 
-        val GRAMMAR_SYSTEM_STRICT = """
-            You are a proofreader. Correct the spelling, grammar, punctuation and capitalisation of
-            the text the user sends.
-            Hard rules:
-            - Return the complete text. Never summarise.
-            - Every sentence of the input must appear in the output, in the same order.
-            - If the input has ten sentences, your answer has ten sentences.
-            - Do not add commentary, headings or notes.
-            - Reply with the corrected text only.
+        val GRAMMAR_EDITS_SYSTEM_STRICT = """
+            You are a proofreader. Find the grammar, spelling, punctuation and capitalisation errors
+            in the text the user sends.
+            Reply with a JSON array and nothing else. Each item: {"find": "...", "replace": "..."}.
+            "find" must be copied exactly from the input. If there are no errors, reply [].
         """.trimIndent()
 
         val CHAT_SYSTEM = """
