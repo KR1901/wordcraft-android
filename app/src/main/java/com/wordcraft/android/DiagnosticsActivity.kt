@@ -148,7 +148,12 @@ class DiagnosticsActivity : Activity() {
             }
         }, LinearLayout.LayoutParams(-1, -2))
 
-        setContentView(ScrollView(this).apply { addView(root) })
+        setContentView(ScrollView(this).apply {
+            // Edge-to-edge is enforced at targetSdk 36; without this the heading sits under the
+            // status bar.
+            fitsSystemWindows = true
+            addView(root)
+        })
         refresh()
     }
 
@@ -158,6 +163,7 @@ class DiagnosticsActivity : Activity() {
                 text = "WordCraft diagnostics failed to draw:\n\n$error"
                 setTextColor(Color.BLACK)
                 setBackgroundColor(Color.WHITE)
+                fitsSystemWindows = true
                 setPadding(dp(16), dp(24), dp(16), dp(24))
             }
         )
